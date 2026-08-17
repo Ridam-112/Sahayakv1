@@ -16,31 +16,75 @@ export function speakText(
 
   // Normalize text - remove markdown or noisy symbols
   const cleanText = text.replace(/[*_#`[\]()]/g, " ").trim();
+  if (!cleanText) {
+    onEnd?.();
+    return () => {};
+  }
+
   const utterance = new SpeechSynthesisUtterance(cleanText);
 
-  // Map language codes to BCP 47 tags
-  const langMap: Record<string, string> = {
-    en: "en-IN",
-    bn: "bn-IN",
-    hi: "hi-IN",
-    te: "te-IN",
-    ta: "ta-IN",
-    mr: "mr-IN",
-    gu: "gu-IN",
-    kn: "kn-IN",
+  // Map language codes to BCP 47 tags (including regional variants)
+  const langMap: Record<string, string[]> = {
+    bn: ["bn-IN", "bn-BD", "bn_IN", "bn_BD", "bn"],
+    hi: ["hi-IN", "hi_IN", "hi"],
+    en: ["en-IN", "en-GB", "en-US", "en_IN", "en"],
+    te: ["te-IN", "te_IN", "te"],
+    ta: ["ta-IN", "ta_IN", "ta"],
+    mr: ["mr-IN", "mr_IN", "mr"],
+    gu: ["gu-IN", "gu_IN", "gu"],
+    kn: ["kn-IN", "kn_IN", "kn"],
   };
 
-  utterance.lang = langMap[lang] || "en-IN";
+  const targetCodes = langMap[lang] || [lang, "en-IN"];
+  // Set default primary language tag on utterance
+  utterance.lang = targetCodes[0] || "bn-IN";
   utterance.rate = 0.95;
   utterance.pitch = 1.0;
 
-  // Try to find a matched voice if available
+  // Try to find a matched voice across available voices
+  const findMatchingVoice = (voices: SpeechSynthesisVoice[]) => {
+    if (!voices || voices.length === 0) return null;
+
+    // 1. Exact match with any target code
+    for (const code of targetCodes) {
+      const match = voices.find(
+        (v) =>
+          v.lang.toLowerCase() === code.toLowerCase() ||
+          v.lang.toLowerCase().replace("_", "-") === code.toLowerCase().replace("_", "-")
+      );
+      if (match) return match;
+    }
+
+    // 2. Starts with language prefix (e.g. 'bn' or 'hi')
+    const prefix = lang.toLowerCase();
+    const prefixMatch = voices.find(
+      (v) =>
+        v.lang.toLowerCase().startsWith(prefix) ||
+        v.name.toLowerCase().includes("bengali") ||
+        (prefix === "bn" && (v.name.toLowerCase().includes("bangla") || v.name.toLowerCase().includes("bn")))
+    );
+    if (prefixMatch) return prefixMatch;
+
+    return null;
+  };
+
   const voices = window.speechSynthesis.getVoices();
-  const targetVoice = voices.find((v) =>
-    v.lang.toLowerCase().startsWith(lang.toLowerCase())
-  );
-  if (targetVoice) {
-    utterance.voice = targetVoice;
+  const matchedVoice = findMatchingVoice(voices);
+  if (matchedVoice) {
+    utterance.voice = matchedVoice;
+    utterance.lang = matchedVoice.lang;
+  }
+
+  // Handle Chrome async voices loading
+  if (!matchedVoice && window.speechSynthesis.onvoiceschanged !== undefined) {
+    window.speechSynthesis.onvoiceschanged = () => {
+      const updatedVoices = window.speechSynthesis.getVoices();
+      const updatedMatch = findMatchingVoice(updatedVoices);
+      if (updatedMatch) {
+        utterance.voice = updatedMatch;
+        utterance.lang = updatedMatch.lang;
+      }
+    };
   }
 
   utterance.onend = () => {
@@ -48,11 +92,20 @@ export function speakText(
   };
 
   utterance.onerror = (e) => {
-    console.warn("TTS Error:", e);
+    // If canceled manually, ignore error
+    if ((e as any).error !== "canceled" && (e as any).error !== "interrupted") {
+      console.warn("TTS Error:", e);
+    }
     onEnd?.();
   };
 
-  window.speechSynthesis.speak(utterance);
+  // Safe speak call
+  try {
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    console.warn("Speech synthesis speak error:", err);
+    onEnd?.();
+  }
 
   return () => {
     window.speechSynthesis.cancel();

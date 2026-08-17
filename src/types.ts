@@ -28,6 +28,7 @@ export interface StateOption {
 export type ScreenView =
   | "language_select"
   | "state_select"
+  | "civic_feed"
   | "mode_choice"
   | "profile_form"
   | "voice_wizard"
@@ -40,6 +41,39 @@ export type ScreenView =
 export type ScreenState = ScreenView;
 
 export type NavTab = "home" | "schemes" | "my_vault" | "help";
+
+export type CivicFeedCategory =
+  | "new_launch"
+  | "deadline"
+  | "government_update"
+  | "impact";
+
+export interface CivicFeedItemTranslation {
+  title: string;
+  summary: string;
+  cta_label: string;
+  target_audience?: string;
+  action_required?: string;
+}
+
+export interface CivicFeedItem {
+  id: string;
+  type: CivicFeedCategory;
+  title: string;
+  summary: string;
+  published_at: string;
+  effective_date?: string;
+  scheme_id?: string;
+  source_name: string;
+  source_url: string;
+  cta_type: "check_eligibility" | "understand_update" | "learn_more";
+  cta_label: string;
+  language: string;
+  target_audience?: string;
+  action_required?: string;
+  category_tag?: string;
+  translations?: Record<string, CivicFeedItemTranslation>;
+}
 
 export interface CitizenProfile {
   name: string;

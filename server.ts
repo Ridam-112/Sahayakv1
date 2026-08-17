@@ -120,6 +120,68 @@ Provide an empathetic, plain-language, accurate answer about Indian central & st
     }
   });
 
+  // AI Civic Feed Update Explainer
+  app.post("/api/explain-update", async (req, res) => {
+    try {
+      const { title, summary, language, userProfile } = req.body;
+      const ai = getGenAI();
+
+      if (!ai) {
+        return res.json({
+          whatChanged: "A new official procedural update or deadline has been announced by the government portal.",
+          whoIsAffected: "All eligible citizens, scheme beneficiaries, and new applicants.",
+          whatShouldDo: "Verify your Aadhaar records, check active scheme deadlines, and complete online e-KYC or visit the nearest CSC kiosk.",
+          plainSummary: summary || title,
+        });
+      }
+
+      const prompt = `You are the Sahayak Civic Feed assistant for Indian public welfare schemes.
+Explain this official government announcement clearly to a rural/semi-urban citizen:
+Title: "${title}"
+Summary: "${summary}"
+Citizen profile: ${JSON.stringify(userProfile || {})}
+Target Language: ${language || "English"}
+
+Respond in valid JSON with these 4 keys:
+{
+  "plainSummary": "<1-2 sentence simplified breakdown in target language>",
+  "whatChanged": "<What officially changed or what was launched>",
+  "whoIsAffected": "<Exact groups of citizens affected>",
+  "whatShouldDo": "<Direct actionable steps the citizen must take>"
+}
+Only output the JSON object without markdown fences if possible.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.7-flash",
+        contents: prompt,
+      });
+
+      const raw = response.text || "{}";
+      const cleanJson = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
+      let parsed = {};
+      try {
+        parsed = JSON.parse(cleanJson);
+      } catch {
+        parsed = {
+          plainSummary: summary,
+          whatChanged: title,
+          whoIsAffected: "Eligible citizens and beneficiaries",
+          whatShouldDo: "Check your eligibility and complete verification before the deadline.",
+        };
+      }
+
+      res.json(parsed);
+    } catch (err: any) {
+      console.error("AI Update Explainer Error:", err);
+      res.status(500).json({
+        plainSummary: req.body.summary || req.body.title,
+        whatChanged: "Official government directive released.",
+        whoIsAffected: "Registered applicants and citizens.",
+        whatShouldDo: "Review your scheme documents and verify your status.",
+      });
+    }
+  });
+
   // Vite middleware for dev or static serving for prod
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

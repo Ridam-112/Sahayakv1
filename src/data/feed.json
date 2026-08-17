@@ -1,0 +1,266 @@
+[
+  {
+    "id": "feed_001",
+    "type": "deadline",
+    "title": "PM-KISAN 19th Installment e-KYC & Land Seeding Deadline",
+    "summary": "Mandatory Aadhaar e-KYC and land registry seeding must be completed to receive the upcoming ₹2,000 Direct Benefit Transfer.",
+    "published_at": "2026-08-10",
+    "effective_date": "2026-08-31",
+    "scheme_id": "pm-kisan",
+    "source_name": "Ministry of Agriculture & Farmers Welfare (pmkisan.gov.in)",
+    "source_url": "https://pmkisan.gov.in",
+    "cta_type": "check_eligibility",
+    "cta_label": "Check eligibility",
+    "language": "en",
+    "target_audience": "Small and marginal landholding farmers across India",
+    "action_required": "Verify Aadhaar OTP e-KYC on the PM-KISAN portal and ensure your bank account is DBT active.",
+    "category_tag": "Agriculture & Farmers",
+    "translations": {
+      "bn": {
+        "title": "পিএম-কিসান ১৯তম কিস্তির ই-কেওয়াইসি এবং জমির তথ্য জমার শেষ তারিখ",
+        "summary": "আসন্ন ₹২,০০০ টাকা সরাসরি ব্যাংক অ্যাকাউন্টে পেতে বাধ্যতামূলক আধার ই-কেওয়াইসি ও জমি সিডিং সম্পন্ন করতে হবে।",
+        "cta_label": "যোগ্যতা যাচাই করুন",
+        "target_audience": "ভারতের সমস্ত ক্ষুদ্র ও প্রান্তিক কৃষক পরিবার",
+        "action_required": "পিএম-কিসান পোর্টালে আধার ওটিপি দিয়ে ই-কেওয়াইসি যাচাই করুন এবং ব্যাংক অ্যাকাউন্টে ডিবিটি সক্রিয় রাখুন।"
+      },
+      "hi": {
+        "title": "पीएम-किसान 19वीं किस्त: ई-केवाईसी और भूमि सत्यापन की अंतिम तिथि",
+        "summary": "आगामी ₹2,000 डीबीटी किस्त प्राप्त करने के लिए आधार ई-केवाईसी और भूमि रिकॉर्ड सत्यापन अनिवार्य है।",
+        "cta_label": "पात्रता जांचें",
+        "target_audience": "देश के सभी लघु एवं सीमांत किसान परिवार",
+        "action_required": "पीएम-किसान पोर्टल पर आधार ओटीपी से ई-केवाईसी पूरा करें और बैंक खाते में डीबीटी लिंक सुनिश्चित करें।"
+      }
+    }
+  },
+  {
+    "id": "feed_002",
+    "type": "new_launch",
+    "title": "Ayushman Vay Vandana: ₹5 Lakh Health Cover Expanded for All Seniors 70+",
+    "summary": "Government opens universal health coverage up to ₹5 Lakhs per year for all citizens aged 70 and above, regardless of income level.",
+    "published_at": "2026-08-14",
+    "effective_date": "2026-09-01",
+    "scheme_id": "ayushman-bharat",
+    "source_name": "National Health Authority (nha.gov.in)",
+    "source_url": "https://pmjay.gov.in",
+    "cta_type": "check_eligibility",
+    "cta_label": "Check eligibility",
+    "language": "en",
+    "target_audience": "All senior citizens aged 70 years and older residing in India",
+    "action_required": "Apply for the dedicated Vay Vandana Ayushman Card with Aadhaar e-KYC on the PMJAY portal.",
+    "category_tag": "Health & Senior Citizens",
+    "translations": {
+      "bn": {
+        "title": "আয়ুষ্মান বয় বন্দনা: ৭০+ সকল প্রবীণ নাগরিকদের জন্য ₹৫ লক্ষ টাকার স্বাস্থ্য কভার",
+        "summary": "আয়ের কোনো সীমাবদ্ধতা ছাড়াই ৭০ বছর বা তার বেশি বয়সী সকল প্রবীণ নাগরিকের জন্য বছরে ₹৫ লক্ষ টাকার স্বাস্থ্য বীমা সুবিধা চালু।",
+        "cta_label": "যোগ্যতা যাচাই করুন",
+        "target_audience": "ভারতে বসবাসকারী ৭০ বছর বা তার বেশি বয়সী সকল প্রবীণ নাগরিক",
+        "action_required": "পিএমজেএওয়াই পোর্টালে আধার ই-কেওয়াইসির মাধ্যমে নতুন বয় বন্দনা আয়ুষ্মান কার্ডের আবেদন করুন।"
+      },
+      "hi": {
+        "title": "आयुष्मान वय वंदना: 70+ वर्ष के सभी वरिष्ठ नागरिकों के लिए ₹5 लाख का स्वास्थ्य कवर",
+        "summary": "आय सीमा के बिना 70 वर्ष और उससे अधिक आयु के सभी वरिष्ठ नागरिकों के लिए ₹5 लाख का मुफ्त उपचार कार्ड शुरू।",
+        "cta_label": "पात्रता जांचें",
+        "target_audience": "70 वर्ष और उससे अधिक आयु के सभी भारतीय नागरिक",
+        "action_required": "पीएमजेएवाई पोर्टल पर आधार ई-केवाईसी करके नया वय वंदना कार्ड प्राप्त करें।"
+      }
+    }
+  },
+  {
+    "id": "feed_003",
+    "type": "government_update",
+    "title": "Aadhaar-Based Face Authentication Enabled for DigiLocker & Scheme Verification",
+    "summary": "Citizens can now perform instant contactless e-KYC using smartphone cameras without requiring fingerprint scanners at service kiosks.",
+    "published_at": "2026-08-12",
+    "effective_date": "2026-08-15",
+    "scheme_id": "digilocker",
+    "source_name": "Unique Identification Authority of India (uidai.gov.in)",
+    "source_url": "https://uidai.gov.in",
+    "cta_type": "understand_update",
+    "cta_label": "Understand update",
+    "language": "en",
+    "target_audience": "All Aadhaar holders accessing central/state welfare services",
+    "action_required": "Use the Aadhaar FaceRD app for paperless scheme verification and document retrieval in Sahayak Vault.",
+    "category_tag": "Digital Public Infrastructure",
+    "translations": {
+      "bn": {
+        "title": "ডিজিলকার ও সরকারি প্রকল্পের জন্য ফেস অথেনটিকেশন (মুখ স্ক্যান) চালু",
+        "summary": "এখন ফিঙ্গারপ্রিন্ট স্ক্যানার ছাড়াই মোবাইল ক্যামেরার মাধ্যমে সরাসরি আধার ফেস ই-কেওয়াইসি করা যাবে।",
+        "cta_label": "আপডেটটি জানুন",
+        "target_audience": "সকল আধার কার্ডধারী ও সরকারি সুবিধার আবেদনকারী",
+        "action_required": "আধার FaceRD অ্যাপ ব্যবহার করে সহজ যাচাইকরণ ও সহায়ক ভল্ট ব্যবহার করুন।"
+      },
+      "hi": {
+        "title": "डिजिलॉकर और योजनाओं के सत्यापन हेतु आधार फेस ऑथेंटिकेशन शुरू",
+        "summary": "अब फिंगरप्रिंट मशीन के बिना सीधे स्मार्टफोन कैमरे से संपर्क रहित आधार ई-केवाईसी की सुविधा उपलब्ध।",
+        "cta_label": "अपडेट समझें",
+        "target_audience": "सरकारी योजनाओं का लाभ लेने वाले सभी आधार धारक",
+        "action_required": "आधार FaceRD ऐप की मदद से कागजी कार्रवाई के बिना सत्यापन पूरा करें।"
+      }
+    }
+  },
+  {
+    "id": "feed_004",
+    "type": "deadline",
+    "title": "National Pre-Matric & Post-Matric Scholarship Applications Closing Soon",
+    "summary": "Online registration for SC/ST/OBC and minority student scholarships closes on 31 August on the National Scholarship Portal.",
+    "published_at": "2026-08-08",
+    "effective_date": "2026-08-31",
+    "scheme_id": "scholarship-nsp",
+    "source_name": "National Scholarship Portal (scholarships.gov.in)",
+    "source_url": "https://scholarships.gov.in",
+    "cta_type": "check_eligibility",
+    "cta_label": "Check eligibility",
+    "language": "en",
+    "target_audience": "Students enrolled in recognized schools, colleges, and ITIs",
+    "action_required": "Submit income certificate, caste certificate, and academic marksheet before the deadline.",
+    "category_tag": "Education & Scholarships",
+    "translations": {
+      "bn": {
+        "title": "জাতীয় প্রাক ও পোস্ট-ম্যাট্রিক স্কলারশিপ আবেদনের সময়সীমা শেষ হতে চলেছে",
+        "summary": "এসসি/এসটি/ওবিসি এবং সংখ্যালঘু ছাত্রছাত্রীদের জন্য জাতীয় স্কলারশিপ পোর্টালে আবেদনের শেষ তারিখ ৩১ আগস্ট।",
+        "cta_label": "যোগ্যতা যাচাই করুন",
+        "target_audience": "স্বীকৃত স্কুল, কলেজ এবং আইটিআই-তে পাঠরত ছাত্রছাত্রী",
+        "action_required": "সময়সীমার আগে আয়ের প্রমাণপত্র, জাতিগত শংসাপত্র ও মার্কশিট আপলোড করুন।"
+      },
+      "hi": {
+        "title": "राष्ट्रीय प्री-मैट्रिक और पोस्ट-मैट्रिक छात्रवृत्ति: आवेदन की अंतिम तिथि निकट",
+        "summary": "एससी/एसटी/ओबीसी एवं अल्पसंख्यक वर्ग के छात्रों के लिए राष्ट्रीय छात्रवृत्ति पोर्टल पर 31 अगस्त तक आवेदन खुला है।",
+        "cta_label": "पात्रता जांचें",
+        "target_audience": "मान्यता प्राप्त विद्यालयों और कॉलेजों में अध्ययनरत विद्यार्थी",
+        "action_required": "अंतिम तिथि से पहले आय प्रमाण पत्र, जाति प्रमाण पत्र और अंकतालिका जमा करें।"
+      }
+    }
+  },
+  {
+    "id": "feed_005",
+    "type": "government_update",
+    "title": "PMAY-G Awaas+ 2026 Rural Housing Survey & Geo-Tagging Window Open",
+    "summary": "Gram Panchayats have commenced ground geo-tagging for families living in kutcha houses to update the rural housing waiting list.",
+    "published_at": "2026-08-11",
+    "effective_date": "2026-09-15",
+    "scheme_id": "pmay-g",
+    "source_name": "Ministry of Rural Development (pmayg.nic.in)",
+    "source_url": "https://pmayg.nic.in",
+    "cta_type": "understand_update",
+    "cta_label": "Understand update",
+    "language": "en",
+    "target_audience": "Rural families living in kutcha dwellings without a pucca house",
+    "action_required": "Contact your local Gram Panchayat Pradhan or Secretary for Awaas+ survey inspection and GPS photo capture.",
+    "category_tag": "Rural Housing",
+    "translations": {
+      "bn": {
+        "title": "প্রধানমন্ত্রী গ্রামীণ আবাস যোজনা (PMAY-G) আবাস+ নতুন সমীক্ষা শুরু",
+        "summary": "কাঁচা ঘরে বসবাসকারী পরিবারগুলির তালিকা হালনাগাদ করতে গ্রাম পঞ্চায়েতে জিও-ট্যাগিং সমীক্ষা চলছে।",
+        "cta_label": "আপডেটটি জানুন",
+        "target_audience": "পাকা বাড়ি না থাকা গ্রামীণ দরিদ্র পরিবার",
+        "action_required": "আবাস+ সমীক্ষার জন্য স্থানীয় গ্রাম পঞ্চায়েত প্রধান বা সচিবের সাথে যোগাযোগ করুন।"
+      },
+      "hi": {
+        "title": "पीएम आवास योजना - ग्रामीण: आवास+ सर्वे एवं जियो-टैगिंग प्रारंभ",
+        "summary": "कच्चे मकानों में रहने वाले परिवारों के लिए ग्रामीण आवास सूची अपडेट करने हेतु ग्राम पंचायतों में सर्वे शुरू।",
+        "cta_label": "अपडेट समझें",
+        "target_audience": "पक्के मकान से वंचित ग्रामीण परिवार",
+        "action_required": "आवास+ सर्वे में नाम दर्ज कराने हेतु ग्राम पंचायत सचिव या प्रधान से संपर्क करें।"
+      }
+    }
+  },
+  {
+    "id": "feed_006",
+    "type": "impact",
+    "title": "Over 11 Crore Beneficiary Families Reached Under PM-KISAN Direct Benefit Transfer",
+    "summary": "Verified financial transfer milestone released transparently via Aadhaar Payment Bridge System (APBS) across 28 states.",
+    "published_at": "2026-08-05",
+    "effective_date": "2026-08-05",
+    "scheme_id": "pm-kisan",
+    "source_name": "Direct Benefit Transfer Mission (dbtbharat.gov.in)",
+    "source_url": "https://dbtbharat.gov.in",
+    "cta_type": "learn_more",
+    "cta_label": "Learn more",
+    "language": "en",
+    "target_audience": "All rural citizens and registered beneficiary farmers",
+    "action_required": "Check your DBT transaction status by entering your Aadhaar or bank account number.",
+    "category_tag": "Public Impact & Transparency",
+    "translations": {
+      "bn": {
+        "title": "পিএম-কিসান প্রকল্পে ১১ কোটির বেশি কৃষক পরিবারে সরাসরি ব্যাংক স্থানান্তর সম্পন্ন",
+        "summary": "আধার পেমেন্ট সিস্টেমের মাধ্যমে কোনো মধ্যস্বত্বভোগী ছাড়াই স্বচ্ছভাবে অর্থ বিতরণ সম্পন্ন হয়েছে।",
+        "cta_label": "বিস্তারিত জানুন",
+        "target_audience": "সকল গ্রামীণ কৃষক ও নাগরিক",
+        "action_required": "আপনার আধার বা ব্যাংক অ্যাকাউন্ট নম্বর দিয়ে ডিবিটি কিস্তির স্থিতি চেক করুন।"
+      },
+      "hi": {
+        "title": "पीएम-किसान योजना के तहत 11 करोड़ से अधिक किसान परिवारों को सीधे खाते में लाभ",
+        "summary": "आधार पेमेंट ब्रिज द्वारा बिना किसी बिचौलिए के पारदर्शिता के साथ वित्तीय सहायता का वितरण।",
+        "cta_label": "और जानें",
+        "target_audience": "देश के सभी ग्रामीण किसान एवं नागरिक",
+        "action_required": "आधार या बैंक खाता दर्ज कर अपनी डीबीटी किस्त की स्थिति जांचें।"
+      }
+    }
+  },
+  {
+    "id": "feed_007",
+    "type": "new_launch",
+    "title": "One Nation One Ration Card (ONORC): Inter-State Portability Enhanced",
+    "summary": "Migrant workers can now claim subsidized food grains at any Fair Price Shop across India using biometric Aadhaar authentication.",
+    "published_at": "2026-08-01",
+    "effective_date": "2026-08-01",
+    "scheme_id": "ration-card",
+    "source_name": "Department of Food & Public Distribution (nfsa.gov.in)",
+    "source_url": "https://nfsa.gov.in",
+    "cta_type": "check_eligibility",
+    "cta_label": "Check eligibility",
+    "language": "en",
+    "target_audience": "Migrant laborers, daily wage workers, and NFSA ration cardholders",
+    "action_required": "Visit the nearest Ration shop (Fair Price Shop) in any state with your Aadhaar card for e-PoS ration collection.",
+    "category_tag": "Food Security & Welfare",
+    "translations": {
+      "bn": {
+        "title": "এক দেশ এক রেশন কার্ড (ONORC): সারা দেশে রেশন সামগ্রী তোলার সুবিধা জোরদার",
+        "summary": "প্রবাসী শ্রমিকরা এখন ভারতের যেকোনো রেশন দোকানে বায়োমেট্রিক আধার যাচাই করে খাদ্যশস্য সংগ্রহ করতে পারবেন।",
+        "cta_label": "যোগ্যতা যাচাই করুন",
+        "target_audience": "প্রবাসী শ্রমিক ও সকল খাদ্যসাথী/রেশন কার্ডধারী পরিবার",
+        "action_required": "অন্য রাজ্যে যেকোনো নিকটস্থ রেশন দোকানে আধার কার্ড নিয়ে গিয়ে বায়োমেট্রিক দিয়ে রেশন সংগ্রহ করুন।"
+      },
+      "hi": {
+        "title": "वन नेशन वन राशन कार्ड (ONORC): देश भर में किसी भी राशन दुकान से अनाज लेने की सुविधा",
+        "summary": "प्रवासी मजदूर अब बायोमेट्रिक आधार सत्यापन द्वारा देश के किसी भी उचित मूल्य की दुकान से राशन ले सकते हैं।",
+        "cta_label": "पात्रता जांचें",
+        "target_audience": "प्रवासी श्रमिक, दैनिक वेतनभोगी और राशन कार्ड धारक",
+        "action_required": "किसी भी राज्य में नजदीकी राशन की दुकान पर आधार कार्ड ले जाएं और राशन प्राप्त करें।"
+      }
+    }
+  },
+  {
+    "id": "feed_008",
+    "type": "deadline",
+    "title": "NSAP Social Pension Aadhaar Seeding & Life Certificate Window",
+    "summary": "Elderly, widow, and disability pension beneficiaries must submit annual Jeevan Pramaan digital life certificate by 30 September.",
+    "published_at": "2026-08-03",
+    "effective_date": "2026-09-30",
+    "scheme_id": "nsap",
+    "source_name": "Ministry of Rural Development (nsap.nic.in)",
+    "source_url": "https://nsap.nic.in",
+    "cta_type": "check_eligibility",
+    "cta_label": "Check eligibility",
+    "language": "en",
+    "target_audience": "Senior citizens (60+), widows, and persons with disabilities receiving pensions",
+    "action_required": "Complete digital life certification via Jeevan Pramaan face app, Post Office, or nearest CSC.",
+    "category_tag": "Social Security & Pension",
+    "translations": {
+      "bn": {
+        "title": "এনএসএপি সামাজিক পেনশন: বার্ষিক জীবন প্রমাণপত্র জমা দেওয়ার সময়সীমা",
+        "summary": "বৃদ্ধ, বিধবা এবং প্রতিবন্ধী ভাতা প্রাপকদের ৩০ সেপ্টেম্বরের মধ্যে বার্ষিক জীবন প্রমাণপত্র জমা দিতে হবে।",
+        "cta_label": "যোগ্যতা যাচাই করুন",
+        "target_audience": "বয়স্ক (৬০+), বিধবা ও প্রতিবন্ধী ভাতাভোগী নাগরিক",
+        "action_required": "নিকটস্থ পোস্ট অফিস, সিএসসি বা জীবন প্রমাণ মোবাইল অ্যাপের মাধ্যমে ডিজিটাল প্রমাণপত্র দিন।"
+      },
+      "hi": {
+        "title": "एनएसएपी सामाजिक सुरक्षा पेंशन: वार्षिक जीवन प्रमाण पत्र जमा करने की अंतिम तिथि",
+        "summary": "वृद्धावस्था, विधवा और दिव्यांग पेंशन लाभार्थियों को 30 सितंबर तक डिजिटल जीवन प्रमाण पत्र जमा करना अनिवार्य है।",
+        "cta_label": "पात्रता जांचें",
+        "target_audience": "वृद्ध (60+), विधवा एवं दिव्यांग पेंशन लाभार्थी",
+        "action_required": "डाकघर, सीएससी या जीवन प्रमाण ऐप से अपना डिजिटल जीवन प्रमाण पत्र दर्ज कराएं।"
+      }
+    }
+  }
+]

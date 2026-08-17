@@ -12,6 +12,7 @@ import {
 } from "./data/mockData";
 import { LanguageSelect } from "./components/LanguageSelect";
 import { StateSelect } from "./components/StateSelect";
+import { CivicFeed } from "./components/CivicFeed";
 import { ModeChoice } from "./components/ModeChoice";
 import { ProfileForm } from "./components/ProfileForm";
 import { VoiceWizard } from "./components/VoiceWizard";
@@ -99,7 +100,7 @@ export default function App() {
   const handleNavTabSelect = (tab: NavTab) => {
     switch (tab) {
       case "home":
-        navigateTo("mode_choice");
+        navigateTo("civic_feed");
         break;
       case "schemes":
         navigateTo("schemes_list");
@@ -131,20 +132,29 @@ export default function App() {
             selectedState={citizenProfile.state}
             onSelectState={(stateName) => {
               handleUpdateProfile({ state: stateName });
-              navigateTo("mode_choice");
+              navigateTo("civic_feed");
             }}
           />
         )}
 
-        {/* Screen 3: Mode Choice (Type vs Voice) */}
-        {currentScreen === "mode_choice" && (
-          <ModeChoice
+        {/* Screen 3: Civic Feed & Home Discovery */}
+        {(currentScreen === "civic_feed" || currentScreen === "mode_choice") && (
+          <CivicFeed
             currentLanguage={currentLanguage}
             onSelectLanguage={handleSelectLanguage}
+            profile={citizenProfile}
+            schemes={schemes}
             onSelectTypeMode={() => navigateTo("profile_form")}
             onSelectVoiceMode={() => navigateTo("voice_wizard")}
             onNeedHelp={() => navigateTo("help_grievance")}
-            onBack={handleBack}
+            onSelectScheme={(sch) => {
+              setSelectedScheme(sch);
+              navigateTo("scheme_detail");
+            }}
+            onSelectNavTab={handleNavTabSelect}
+            onOpenAssistant={(query) => {
+              setShowAssistantModal(true);
+            }}
           />
         )}
 
