@@ -1,0 +1,10 @@
+{
+  "name": "Sahayak",
+  "description": "Official Digital Public Infrastructure (DPI) platform for citizen scheme discovery, voice-assisted eligibility, guided application filing, document vault, and grievance redressal.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
