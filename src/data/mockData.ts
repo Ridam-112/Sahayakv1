@@ -90,22 +90,22 @@ export const ALL_INDIAN_STATES = [
 ];
 
 export const INITIAL_CITIZEN_PROFILE: CitizenProfile = {
-  name: "Bikash Mondal",
-  age: "45",
-  income: "45,000",
+  name: "",
+  age: "",
+  income: "",
   state: "West Bengal",
-  occupation: "Farmer",
-  socialCategory: "OBC",
-  gender: "Male",
+  occupation: "",
+  socialCategory: "",
+  gender: "",
   hasDisability: false,
-  ownsLand: true,
-  landSizeAcres: "1.2",
+  ownsLand: false,
+  landSizeAcres: "",
   hasPuccaHouse: false,
   hasRationCard: false,
   rationCardNumber: "",
   aadhaarNumber: "",
-  bankAccountLinked: true,
-  bankAccountNumber: "SBIN00481923891",
+  bankAccountLinked: false,
+  bankAccountNumber: "",
   landParcelId: "",
 };
 
@@ -116,7 +116,7 @@ export const VOICE_STEPS = [
     questionEn: "Your Age?",
     questionHi: "आपकी उम्र क्या है?",
     fieldKey: "age" as keyof CitizenProfile,
-    defaultValue: "45",
+    defaultValue: "",
     type: "number",
   },
   {
@@ -125,7 +125,7 @@ export const VOICE_STEPS = [
     questionEn: "Your Annual Income?",
     questionHi: "आपकी वार्षिक आय कितनी है?",
     fieldKey: "income" as keyof CitizenProfile,
-    defaultValue: "45,000",
+    defaultValue: "",
     type: "number",
   },
   {
@@ -134,7 +134,7 @@ export const VOICE_STEPS = [
     questionEn: "Your Occupation?",
     questionHi: "आपका व्यवसाय क्या है?",
     fieldKey: "occupation" as keyof CitizenProfile,
-    defaultValue: "Farmer",
+    defaultValue: "",
     type: "text",
   },
   {
@@ -143,7 +143,7 @@ export const VOICE_STEPS = [
     questionEn: "Do you own cultivable land?",
     questionHi: "क्या आपके पास अपनी खेती योग्य भूमि है?",
     fieldKey: "ownsLand" as keyof CitizenProfile,
-    defaultValue: "Yes",
+    defaultValue: "",
     type: "boolean",
   },
   {
@@ -152,7 +152,7 @@ export const VOICE_STEPS = [
     questionEn: "Your Social Category?",
     questionHi: "आपकी सामाजिक श्रेणी क्या है?",
     fieldKey: "socialCategory" as keyof CitizenProfile,
-    defaultValue: "OBC",
+    defaultValue: "",
     type: "text",
   },
   {
@@ -161,7 +161,7 @@ export const VOICE_STEPS = [
     questionEn: "Do you have any physical disability?",
     questionHi: "क्या आपको कोई शारीरिक दिव्यांगता है?",
     fieldKey: "hasDisability" as keyof CitizenProfile,
-    defaultValue: "No",
+    defaultValue: "",
     type: "boolean",
   },
 ];
@@ -460,7 +460,317 @@ export const INITIAL_SCHEMES: Scheme[] = [
       },
     ],
   },
+  {
+    id: "nsp-scholarship",
+    code: "NSP-SCHOLARSHIP",
+    name: "National Post-Matric & Higher Education Scholarship",
+    fullName: "National Scholarship Portal (NSP) - Post Matric Student Financial Assistance",
+    benefitShort: "₹25,000 to ₹50,000/year academic grant & fee waiver.",
+    description: "Direct annual educational grant and tuition fee waiver for eligible students pursuing post-matric, diploma, degree, or professional studies.",
+    status: "eligible",
+    statusText: "POTENTIALLY ELIGIBLE",
+    officialUrl: "https://scholarships.gov.in",
+    whyEligibleReason:
+      "Matches your student profile, educational stage, and family income threshold for post-matric financial grants.",
+    documents: [
+      {
+        name: "College / School ID & Admission Receipt",
+        description: "Proof of active regular student enrollment.",
+        icon: "certificate",
+      },
+      {
+        name: "Aadhaar Card",
+        description: "Linked to student bank account.",
+        icon: "id",
+      },
+      {
+        name: "Family Income Certificate",
+        description: "Issued by competent revenue authority (BDO/Tehsildar).",
+        icon: "income",
+      },
+      {
+        name: "Bank Passbook (Student DBT)",
+        description: "Individual account linked with Aadhaar.",
+        icon: "bank",
+      },
+    ],
+    howToApplySteps: [
+      {
+        stepNumber: 1,
+        title: "Register on NSP (scholarships.gov.in)",
+        description: "Create One-Time Registration (OTR) with Aadhaar.",
+      },
+      {
+        stepNumber: 2,
+        title: "Institute Verification",
+        description: "College Nodal Officer verifies your bonafide enrollment.",
+      },
+      {
+        stepNumber: 3,
+        title: "State Merit Disbursement",
+        description: "Scholarship credited directly via PFMS DBT.",
+      },
+    ],
+    fullCriteria: [
+      "Must be an active student enrolled in recognized school/college/university.",
+      "Family annual income generally under ₹2.5 Lakhs (subject to scheme guidelines).",
+      "Valid Aadhaar and individual bank account.",
+    ],
+    requiredDetailsChecklist: [
+      {
+        id: "full_name",
+        label: "Full Name",
+        sublabel: "Matches Student ID",
+        status: "have_it",
+        fieldKey: "name",
+      },
+      {
+        id: "aadhaar",
+        label: "Aadhaar Number",
+        sublabel: "Required for NSP OTR",
+        status: "missing",
+        fieldKey: "aadhaarNumber",
+      },
+      {
+        id: "bank_acc",
+        label: "Student Bank Account",
+        sublabel: "DBT Linked",
+        status: "have_it",
+        fieldKey: "bankAccountNumber",
+      },
+    ],
+  },
+  {
+    id: "pm-vishwakarma",
+    code: "PM-VISHWAKARMA",
+    name: "PM Vishwakarma Scheme",
+    fullName: "Pradhan Mantri Vishwakarma Kaushal Samman",
+    benefitShort: "₹15,000 toolkit incentive + collateral-free loans at 5%.",
+    description: "Comprehensive support for traditional artisans and craftspeople (blacksmiths, tailors, carpenters, weavers, potters) including skill training stipend and subsidized credit.",
+    status: "eligible",
+    statusText: "POTENTIALLY ELIGIBLE",
+    officialUrl: "https://pmvishwakarma.gov.in",
+    whyEligibleReason:
+      "Designed for self-employed traditional artisans and tradesmen seeking skill certification, free toolkits, and low-interest enterprise credit.",
+    documents: [
+      {
+        name: "Aadhaar & Mobile Linked",
+        description: "Biometric e-KYC verification at CSC.",
+        icon: "id",
+      },
+      {
+        name: "Trade Skill Declaration",
+        description: "Self-declaration of traditional trade practice.",
+        icon: "certificate",
+      },
+      {
+        name: "Bank Account Details",
+        description: "For ₹15,000 toolkit voucher and loan disbursement.",
+        icon: "bank",
+      },
+    ],
+    howToApplySteps: [
+      {
+        stepNumber: 1,
+        title: "Biometric Registration at CSC",
+        description: "Visit nearest CSC kiosk with Aadhaar and bank details.",
+      },
+      {
+        stepNumber: 2,
+        title: "Gram Panchayat / ULB Verification",
+        description: "Local body confirms trade practice.",
+      },
+      {
+        stepNumber: 3,
+        title: "Skill Assessment & Toolkit Grant",
+        description: "Complete 5-day basic training and receive ₹15,000 digital toolkit voucher.",
+      },
+    ],
+    fullCriteria: [
+      "Must be engaged in one of the 18 eligible traditional family trades/crafts.",
+      "Minimum age 18 years on date of application.",
+      "Not availed similar government loans (PMEGP/Mudra) in last 5 years.",
+    ],
+    requiredDetailsChecklist: [
+      {
+        id: "full_name",
+        label: "Full Name",
+        sublabel: "Matches Trade Reg",
+        status: "have_it",
+        fieldKey: "name",
+      },
+      {
+        id: "aadhaar",
+        label: "Aadhaar Number",
+        sublabel: "Biometric e-KYC",
+        status: "missing",
+        fieldKey: "aadhaarNumber",
+      },
+    ],
+  },
 ];
+
+// Dynamic Scheme Matching Engine
+export function evaluateSchemesForProfile(
+  profile: CitizenProfile,
+  schemes: Scheme[] = INITIAL_SCHEMES
+): Scheme[] {
+  const ageNum = parseInt(profile.age) || 0;
+  const isStudent =
+    (profile.occupation || "").toLowerCase().includes("student") ||
+    (profile.occupation || "").toLowerCase().includes("study") ||
+    (profile.occupation || "").toLowerCase().includes("college") ||
+    (profile.occupation || "").toLowerCase().includes("ছাত্র");
+
+  const isFarmer =
+    (profile.occupation || "").toLowerCase().includes("farmer") ||
+    (profile.occupation || "").toLowerCase().includes("krishi") ||
+    (profile.occupation || "").toLowerCase().includes("chash") ||
+    (profile.occupation || "").toLowerCase().includes("kisan") ||
+    (profile.occupation || "").toLowerCase().includes("কৃষক") ||
+    profile.ownsLand === true;
+
+  const isArtisan =
+    (profile.occupation || "").toLowerCase().includes("artisan") ||
+    (profile.occupation || "").toLowerCase().includes("craftsman") ||
+    (profile.occupation || "").toLowerCase().includes("karigar") ||
+    (profile.occupation || "").toLowerCase().includes("tailor") ||
+    (profile.occupation || "").toLowerCase().includes("carpenter") ||
+    (profile.occupation || "").toLowerCase().includes("কারিগর");
+
+  return schemes.map((sch) => {
+    // 1. PM-KISAN
+    if (sch.id === "pm-kisan") {
+      if (isFarmer && profile.ownsLand) {
+        return {
+          ...sch,
+          status: "eligible" as const,
+          statusText: "POTENTIALLY ELIGIBLE",
+          whyEligibleReason: `You may qualify based on: ✓ Farmer/Agriculture ✓ Cultivable Landowner ✓ State (${profile.state || "India"}) ✓ Bank DBT linked`,
+        };
+      } else if (isFarmer) {
+        return {
+          ...sch,
+          status: "needs_info" as const,
+          statusText: "NEEDS LAND DETAILS",
+          infoRequiredPrompt: "Please confirm your land holding or patta number to verify PM-KISAN entitlement.",
+          whyNotEligibleReason: "Requires cultivable land holding documents in your name or family.",
+        };
+      } else {
+        return {
+          ...sch,
+          status: "not_eligible" as const,
+          statusText: "NOT ELIGIBLE",
+          whyNotEligibleReason: "PM-KISAN requires cultivable landholding farmer status.",
+        };
+      }
+    }
+
+    // 2. Ayushman Bharat (AB-PMJAY)
+    if (sch.id === "ayushman-bharat") {
+      if (profile.hasRationCard || profile.rationCardNumber) {
+        return {
+          ...sch,
+          status: "eligible" as const,
+          statusText: "POTENTIALLY ELIGIBLE",
+          whyEligibleReason: `You may qualify based on: ✓ Valid Ration Card / SECC criteria ✓ Free ₹5 Lakh Hospitalization coverage`,
+        };
+      } else {
+        return {
+          ...sch,
+          status: "needs_info" as const,
+          statusText: "NEEDS RATION CARD",
+          infoRequiredPrompt: "Please provide your NFSA / State Ration Card number to confirm eligibility.",
+          whyEligibleReason: "Appears relevant for secondary & tertiary healthcare for family members.",
+        };
+      }
+    }
+
+    // 3. PMAY-G (Housing)
+    if (sch.id === "pmay-g") {
+      if (profile.hasPuccaHouse) {
+        return {
+          ...sch,
+          status: "not_eligible" as const,
+          statusText: "NOT ELIGIBLE",
+          whyNotEligibleReason: "Applicant already possesses a permanent pucca house.",
+        };
+      } else {
+        return {
+          ...sch,
+          status: "eligible" as const,
+          statusText: "POTENTIALLY ELIGIBLE",
+          whyEligibleReason: `You may qualify based on: ✓ Houseless / Kutcha house category ✓ Low income family in ${profile.state || "State"}`,
+        };
+      }
+    }
+
+    // 4. NSAP Pension
+    if (sch.id === "nsap") {
+      if (ageNum >= 60 || profile.hasDisability) {
+        return {
+          ...sch,
+          status: "eligible" as const,
+          statusText: "POTENTIALLY ELIGIBLE",
+          whyEligibleReason: `You may qualify based on: ✓ Senior age (${profile.age} yrs) or Disability status ✓ Monthly direct pension`,
+        };
+      } else {
+        return {
+          ...sch,
+          status: "not_eligible" as const,
+          statusText: "NOT ELIGIBLE",
+          whyNotEligibleReason: `Age (${profile.age || "Under 60"}) does not meet NSAP senior pension threshold (60+ years).`,
+        };
+      }
+    }
+
+    // 5. Student Scholarship (NSP)
+    if (sch.id === "nsp-scholarship") {
+      if (isStudent || (ageNum >= 14 && ageNum <= 28)) {
+        const eduDesc = profile.education?.level === "school"
+          ? `School (Class ${profile.education.class || "Student"})`
+          : profile.education?.level === "college"
+          ? `Higher Education (${profile.education.course || "College"}${profile.education.year ? `, Year ${profile.education.year}` : ""})`
+          : "Student Status";
+
+        return {
+          ...sch,
+          status: "eligible" as const,
+          statusText: "POTENTIALLY ELIGIBLE",
+          whyEligibleReason: `You may qualify based on: ✓ ${eduDesc} ✓ Age (${profile.age || "20"}) ✓ Family income bracket in ${profile.state || "State"}`,
+        };
+      } else {
+        return {
+          ...sch,
+          status: "not_eligible" as const,
+          statusText: "NOT ELIGIBLE",
+          whyNotEligibleReason: "Designed for active students pursuing school, post-matric, or higher education.",
+        };
+      }
+    }
+
+    // 6. PM Vishwakarma
+    if (sch.id === "pm-vishwakarma") {
+      if (isArtisan || profile.occupation.toLowerCase().includes("self-employed")) {
+        return {
+          ...sch,
+          status: "eligible" as const,
+          statusText: "POTENTIALLY ELIGIBLE",
+          whyEligibleReason: `You may qualify based on: ✓ Artisan / Craftsman trade ✓ Age (${profile.age || "18+"}) ✓ Digital toolkit incentive`,
+        };
+      } else {
+        return {
+          ...sch,
+          status: "not_eligible" as const,
+          statusText: "NOT ELIGIBLE",
+          whyNotEligibleReason: "Requires active practice of traditional trade or artisan crafts.",
+        };
+      }
+    }
+
+    return sch;
+  });
+}
 
 export const INITIAL_VAULT_DOCS: VaultDocument[] = [
   {

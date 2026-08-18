@@ -70,6 +70,24 @@ export const ProfileForm: React.FC<ProfileFormProps> = ({
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4 pt-4">
+            {/* Name */}
+            <div className="space-y-1.5">
+              <label
+                htmlFor="input-name"
+                className="block text-xs font-semibold text-slate-700"
+              >
+                Your Name / আপনার নাম
+              </label>
+              <input
+                id="input-name"
+                type="text"
+                value={profile.name || ""}
+                onChange={(e) => onChangeProfile({ name: e.target.value })}
+                placeholder="e.g. Rahul Sharma"
+                className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 shadow-2xs transition-all"
+              />
+            </div>
+
             {/* Age */}
             <div className="space-y-1.5">
               <label

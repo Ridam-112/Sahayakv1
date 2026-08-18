@@ -32,6 +32,7 @@ export type ScreenView =
   | "mode_choice"
   | "profile_form"
   | "voice_wizard"
+  | "find_schemes_voice"
   | "schemes_list"
   | "scheme_detail"
   | "scheme_apply"
@@ -41,6 +42,31 @@ export type ScreenView =
 export type ScreenState = ScreenView;
 
 export type NavTab = "home" | "schemes" | "my_vault" | "help";
+
+export interface ConversationMessage {
+  id: string;
+  sender: "agent" | "user";
+  text: string;
+  textBn?: string;
+  textHi?: string;
+  timestamp: string;
+  fieldKey?: keyof CitizenProfile | string;
+  suggestedAnswers?: string[];
+  collectedValuePreview?: string;
+}
+
+export interface ActiveVaultApplication {
+  schemeId: string;
+  schemeName: string;
+  schemeCode: string;
+  status: "in_progress" | "submitted" | "action_required";
+  progressPercentage: number;
+  nextStep: string;
+  deadline?: string;
+  benefitShort?: string;
+  startedAt: string;
+  completedChecklistIds?: string[];
+}
 
 export type CivicFeedCategory =
   | "new_launch"
@@ -75,6 +101,17 @@ export interface CivicFeedItem {
   translations?: Record<string, CivicFeedItemTranslation>;
 }
 
+export interface EducationProfile {
+  level?: "school" | "college" | null;
+  class?: number | string | null;
+  board?: string | null;
+  schoolType?: string | null;
+  course?: string | null;
+  year?: number | string | null;
+  semester?: number | string | null;
+  institution?: string | null;
+}
+
 export interface CitizenProfile {
   name: string;
   age: string;
@@ -93,6 +130,7 @@ export interface CitizenProfile {
   bankAccountLinked: boolean;
   bankAccountNumber?: string;
   landParcelId?: string;
+  education?: EducationProfile;
 }
 
 export type EligibilityStatus = "eligible" | "needs_info" | "not_eligible";

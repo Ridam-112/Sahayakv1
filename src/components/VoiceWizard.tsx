@@ -33,13 +33,13 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
   const step = VOICE_STEPS[currentStepIndex];
 
   // Current value from profile
-  const currentValue = (profile[step.fieldKey] as string) || step.defaultValue;
+  const currentValue = (profile[step.fieldKey] as string) || "";
 
   // Question in chosen language
   const getQuestion = () => {
     if (currentLanguage === "hi") return step.questionHi;
     if (currentLanguage === "bn") return step.questionBn;
-    return step.questionBn; // Default as per UI screenshot
+    return step.questionEn;
   };
 
   const getSubQuestion = () => {
@@ -52,7 +52,7 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
   const askQuestionAloud = () => {
     setIsSpeaking(true);
     const textToSpeak = getQuestion();
-    const langCode = currentLanguage === "hi" ? "hi" : "bn";
+    const langCode = currentLanguage === "hi" ? "hi" : currentLanguage === "bn" ? "bn" : "en";
     speakText(textToSpeak, langCode, () => {
       setIsSpeaking(false);
     });
@@ -112,10 +112,7 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
         setIsListening(false);
       }
     } else {
-      // Browser simulation fallback for mic tap
-      setTimeout(() => {
-        setIsListening(false);
-      }, 1500);
+      setIsListening(false);
     }
   };
 
@@ -133,9 +130,15 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
 
   // Display value formatting
   const displayValue = () => {
+    if (!currentValue) {
+      return currentLanguage === "bn"
+        ? "— (উত্তর দিন / Say your answer)"
+        : currentLanguage === "hi"
+        ? "— (उत्तर दें / Say your answer)"
+        : "— (Say or type answer)";
+    }
     if (step.id === "age") {
-      // Convert to Bengali numerals if language is Bengali as in screenshot "৪৫"
-      return toBengaliNumerals(currentValue || "45");
+      return currentLanguage === "bn" ? toBengaliNumerals(currentValue) : currentValue;
     }
     if (step.type === "boolean") {
       return currentValue ? "হ্যাঁ (Yes)" : "না (No)";
