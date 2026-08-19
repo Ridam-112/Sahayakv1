@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 
 dotenv.config();
 
@@ -27,7 +27,8 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
   // Dedicated High-Fidelity Audio TTS Endpoint (Gemini TTS) with Server Memory Cache
   const ttsAudioCache = new Map<string, string>();
@@ -58,10 +59,26 @@ async function startServer() {
     return Buffer.concat([header, pcmBuffer]);
   }
 
-  let ttsCooldownUntil = 0;
+    let ttsCooldownUntil = 0;
 
-  async function generateAndCacheAudio(text: string, voiceName = "Aoede"): Promise<string | null> {
-    const cacheKey = `${voiceName}:${text.trim()}`;
+  // Supported Gemini TTS voices: 'Kore' (female), 'Zephyr' (female/calm), 'Puck' (male), 'Charon' (male), 'Fenrir' (male)
+  function resolveTTSVoice(requestedVoice?: string): string {
+    const validVoices = ["Kore", "Zephyr", "Puck", "Charon", "Fenrir"];
+    if (requestedVoice && validVoices.includes(requestedVoice)) {
+      return requestedVoice;
+    }
+    if (requestedVoice && (requestedVoice.toLowerCase().includes("male") || requestedVoice.toLowerCase().includes("man") || requestedVoice.toLowerCase().includes("boy"))) {
+      return "Puck";
+    }
+    return "Kore"; // Default natural warm female voice
+  }
+
+  async function generateAndCacheAudio(text: string, rawVoiceName = "Kore"): Promise<string | null> {
+    const voiceName = resolveTTSVoice(rawVoiceName);
+    const cleanText = text.replace(/[*_#`[\]()]/g, " ").trim();
+    if (!cleanText) return null;
+
+    const cacheKey = `${voiceName}:${cleanText}`;
     if (ttsAudioCache.has(cacheKey)) {
       return ttsAudioCache.get(cacheKey)!;
     }
@@ -73,12 +90,19 @@ async function startServer() {
     const ai = getGenAI();
     if (!ai) return null;
 
+    // Direct speech synthesis prompt for native Bengali / Hindi intonation
+    const speechPrompt = cleanText.match(/[\u0980-\u09FF]/)
+      ? `Say naturally in Bengali with a warm, clear and friendly tone: ${cleanText}`
+      : cleanText.match(/[\u0900-\u097F]/)
+      ? `Say naturally in Hindi with a warm, clear and friendly tone: ${cleanText}`
+      : cleanText;
+
     try {
       const ttsResponse = await ai.models.generateContent({
         model: "gemini-3.1-flash-tts-preview",
-        contents: text.trim(),
+        contents: [{ parts: [{ text: speechPrompt }] }],
         config: {
-          responseModalities: ["AUDIO"],
+          responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
@@ -103,18 +127,156 @@ async function startServer() {
       ttsAudioCache.set(cacheKey, audioBase64);
       return audioBase64;
     } catch (e: any) {
-      const errMsg = e?.message || "";
+      const errMsg = e?.message || (typeof e === "object" ? JSON.stringify(e) : String(e));
       if (errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("quota")) {
         const match = errMsg.match(/retry in ([0-9.]+)s/i) || errMsg.match(/retryDelay":"([0-9]+)s"/i);
-        const retrySeconds = match && match[1] ? Math.ceil(parseFloat(match[1])) : 30;
+        const retrySeconds = match && match[1] ? Math.ceil(parseFloat(match[1])) : 20;
         ttsCooldownUntil = Date.now() + retrySeconds * 1000;
         console.log(`[Sahayak TTS Notice] API rate limit reached. Cooling down Gemini TTS for ${retrySeconds}s.`);
+      } else if (errMsg.includes("503") || errMsg.includes("UNAVAILABLE") || errMsg.includes("high demand")) {
+        ttsCooldownUntil = Date.now() + 10000;
+        console.log(`[Sahayak TTS Notice] TTS model under temporary high demand (503). Cooling down for 10s.`);
       } else {
-        console.warn(`[TTS Notice] ${errMsg.substring(0, 120)}`);
+        console.log(`[Sahayak TTS Notice] Audio generation notice: ${errMsg.substring(0, 120)}`);
       }
       return null;
     }
   }
+
+  // Resilient multi-model fallback executor for Gemini text tasks
+  async function generateContentWithFallback(
+    promptConfig: {
+      contents: string;
+      config?: Record<string, any>;
+    },
+    contextName = "AI Task"
+  ): Promise<string | null> {
+    const ai = getGenAI();
+    if (!ai) return null;
+
+    const modelsToTry = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+    for (const model of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: promptConfig.contents,
+          config: promptConfig.config,
+        });
+        if (response.text) {
+          return response.text;
+        }
+      } catch (err: any) {
+        const msg = err?.message || (typeof err === "object" ? JSON.stringify(err) : String(err));
+        const isHighDemandOrQuota =
+          msg.includes("503") ||
+          msg.includes("UNAVAILABLE") ||
+          msg.includes("high demand") ||
+          msg.includes("429") ||
+          msg.includes("RESOURCE_EXHAUSTED") ||
+          msg.includes("quota");
+
+        if (isHighDemandOrQuota) {
+          console.log(`[Sahayak AI Notice] ${contextName} (${model} busy/rate-limited). Trying next fallback.`);
+          continue;
+        } else {
+          console.log(`[Sahayak AI Notice] ${contextName} notice on ${model}: ${msg.substring(0, 100)}`);
+        }
+      }
+    }
+    return null;
+  }
+
+  // Gemini Multimodal Native Audio Understanding & Reasoning Executor
+  async function generateContentWithAudio(
+    audioBase64: string,
+    audioMimeType: string,
+    promptText: string,
+    contextName = "Gemini Native Audio Turn"
+  ): Promise<string | null> {
+    const ai = getGenAI();
+    if (!ai) return null;
+
+    // Strip data URL prefix if provided
+    const cleanBase64 = audioBase64.replace(/^data:audio\/[a-zA-Z0-9.+_-]+;base64,/, "").trim();
+    if (!cleanBase64) return null;
+
+    const mime = (audioMimeType || "audio/webm").split(";")[0];
+    const modelsToTry = ["gemini-3.7-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+
+    for (const model of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: [
+            {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: mime,
+                    data: cleanBase64,
+                  },
+                },
+                {
+                  text: promptText,
+                },
+              ],
+            },
+          ],
+          config: {
+            responseMimeType: "application/json",
+          },
+        });
+
+        if (response.text) {
+          return response.text;
+        }
+      } catch (err: any) {
+        const msg = err?.message || (typeof err === "object" ? JSON.stringify(err) : String(err));
+        console.log(`[Sahayak Audio AI Notice] ${contextName} on ${model}: ${msg.substring(0, 120)}`);
+      }
+    }
+    return null;
+  }
+
+  // Direct Audio Speech Understanding endpoint
+  app.post("/api/voice-understand", async (req, res) => {
+    try {
+      const { audioBase64, audioMimeType = "audio/webm", language = "bn" } = req.body || {};
+      if (!audioBase64) {
+        return res.status(400).json({ error: "audioBase64 is required", hasSpeech: false, transcript: "" });
+      }
+
+      const langMap: Record<string, string> = {
+        bn: "Bengali",
+        hi: "Hindi",
+        en: "English",
+      };
+      const langName = langMap[language] || "Bengali";
+
+      const prompt = `Listen carefully to this user audio in ${langName}.
+Analyze the user's speech.
+Output JSON only:
+{
+  "hasSpeech": boolean,
+  "transcript": "<exact words spoken by user in original native script>",
+  "englishTranslation": "<english translation of spoken words>",
+  "detectedLanguage": "bn" | "hi" | "en"
+}`;
+
+      const raw = await generateContentWithAudio(audioBase64, audioMimeType, prompt, "Direct Audio Transcription");
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          return res.json(parsed);
+        } catch {}
+      }
+
+      return res.json({ hasSpeech: false, transcript: "", detectedLanguage: language });
+    } catch (e: any) {
+      console.error("Voice understand error:", e);
+      res.status(500).json({ error: "Voice processing failed", hasSpeech: false, transcript: "" });
+    }
+  });
 
   // Note: Background prompt pre-warming is omitted on startup to prevent triggering 429 rate limits on free-tier API keys.
 
@@ -126,8 +288,9 @@ async function startServer() {
         return res.status(400).json({ error: "Text is required" });
       }
 
-      const voiceName = voice || "Aoede"; // High quality female voice
-      const cleanText = text.trim();
+      const rawVoice = voice || "Kore";
+      const voiceName = resolveTTSVoice(rawVoice);
+      const cleanText = text.replace(/[*_#`[\]()]/g, " ").trim();
       const cacheKey = `${voiceName}:${cleanText}`;
 
       if (ttsAudioCache.has(cacheKey)) {
@@ -257,53 +420,36 @@ ${cleanName}
       return { draft, subject };
     };
 
-    if (!ai) {
-      return res.json(createFallbackGrievance());
-    }
+    const prompt = `You are a formal civic grievance drafting assistant for the Sahayak Indian Digital Public Infrastructure (DPI) platform.
+    The citizen provided the following informal issue description: "${complaintText || "PM-KISAN payment not received"}"
+    Relevant Scheme: ${cleanScheme}
+    Citizen Name: ${cleanName}
+    Target Language: ${cleanLang}
 
-    try {
-      const prompt = `You are a formal civic grievance drafting assistant for the Sahayak Indian Digital Public Infrastructure (DPI) platform.
-The citizen provided the following informal issue description: "${complaintText || "PM-KISAN payment not received"}"
-Relevant Scheme: ${cleanScheme}
-Citizen Name: ${cleanName}
-Target Language: ${cleanLang}
+    Generate a concise, highly professional, polite, and legally standard formal complaint letter suitable for submission to CPGRAMS (Centralized Public Grievance Redress and Monitoring System - pgportal.gov.in) or State Grievance Nodal Officers.
+    Output format:
+    Subject: <Formal clear subject line>
 
-Generate a concise, highly professional, polite, and legally standard formal complaint letter suitable for submission to CPGRAMS (Centralized Public Grievance Redress and Monitoring System - pgportal.gov.in) or State Grievance Nodal Officers.
-Output format:
-Subject: <Formal clear subject line>
+    To the Grievance Redressal Officer,
 
-To the Grievance Redressal Officer,
+    <Body paragraphs explaining the facts clearly, citing registered records, asking for verification and resolution>
 
-<Body paragraphs explaining the facts clearly, citing registered records, asking for verification and resolution>
+    Sincerely,
+    ${cleanName}`;
 
-Sincerely,
-${cleanName}`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3.7-flash",
-        contents: prompt,
-      });
-
-      const draftText = response.text || "";
+    const draftText = await generateContentWithFallback({ contents: prompt }, "Grievance Draft");
+    if (draftText) {
       const subjectMatch = draftText.match(/Subject:\s*([^\n]+)/i);
       const subject = subjectMatch ? subjectMatch[1] : `Grievance regarding ${cleanScheme}`;
-
-      res.json({ draft: draftText, subject });
-    } catch (err: any) {
-      const isQuota = err?.status === 429 || String(err?.message || "").includes("429") || String(err?.message || "").includes("RESOURCE_EXHAUSTED");
-      if (isQuota) {
-        console.warn("Gemini rate quota reached; using localized grievance template.");
-      } else {
-        console.warn("AI Draft warning, using localized fallback:", err?.message || err);
-      }
-      res.json(createFallbackGrievance());
+      return res.json({ draft: draftText, subject });
     }
+
+    res.json(createFallbackGrievance());
   });
 
   // AI Scheme Advisor / Assistant
   app.post("/api/ask-assistant", async (req, res) => {
     const { question = "", language = "English" } = req.body || {};
-    const ai = getGenAI();
     const qLower = question.toLowerCase();
 
     const createFallbackAssistantAnswer = () => {
@@ -359,38 +505,23 @@ ${cleanName}`;
       return "Sahayak helps you discover and apply for verified government welfare schemes matching your age, occupation, and income profile with direct DBT verification.";
     };
 
-    if (!ai) {
-      return res.json({ answer: createFallbackAssistantAnswer() });
-    }
-
-    try {
-      const prompt = `You are Sahayak, an official Indian Digital Public Infrastructure (DPI) conversational citizen guide.
+    const prompt = `You are Sahayak, an official Indian Digital Public Infrastructure (DPI) conversational citizen guide.
 Citizen query: "${question}"
 Language preference: ${language}
 
 Provide an empathetic, plain-language, accurate answer about Indian central & state welfare schemes, required documents (Aadhaar, Land records, Bank passbook, Ration card), grievance filing on CPGRAMS, or eligibility steps. Keep it under 3-4 concise sentences.`;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.7-flash",
-        contents: prompt,
-      });
-
-      res.json({ answer: response.text });
-    } catch (err: any) {
-      const isQuota = err?.status === 429 || String(err?.message || "").includes("429") || String(err?.message || "").includes("RESOURCE_EXHAUSTED");
-      if (isQuota) {
-        console.warn("Gemini rate quota reached; using localized assistant response.");
-      } else {
-        console.warn("AI Assist warning, using fallback:", err?.message || err);
-      }
-      res.json({ answer: createFallbackAssistantAnswer() });
+    const answer = await generateContentWithFallback({ contents: prompt }, "Scheme Assistant");
+    if (answer) {
+      return res.json({ answer });
     }
+
+    res.json({ answer: createFallbackAssistantAnswer() });
   });
 
   // AI Civic Feed Update Explainer
   app.post("/api/explain-update", async (req, res) => {
     const { title = "", summary = "", language = "English", userProfile } = req.body || {};
-    const ai = getGenAI();
 
     const createFallbackExplanation = () => {
       const isBn = language.toLowerCase().includes("bengali") || language === "bn";
@@ -420,12 +551,7 @@ Provide an empathetic, plain-language, accurate answer about Indian central & st
       };
     };
 
-    if (!ai) {
-      return res.json(createFallbackExplanation());
-    }
-
-    try {
-      const prompt = `You are the Sahayak Civic Feed assistant for Indian public welfare schemes.
+    const prompt = `You are the Sahayak Civic Feed assistant for Indian public welfare schemes.
 Explain this official government announcement clearly to a rural/semi-urban citizen:
 Title: "${title}"
 Summary: "${summary}"
@@ -441,40 +567,34 @@ Respond in valid JSON with these 4 keys:
 }
 Only output the JSON object without markdown fences if possible.`;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.7-flash",
-        contents: prompt,
-      });
-
-      const raw = response.text || "{}";
-      const cleanJson = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
-      let parsed = JSON.parse(cleanJson);
-      if (!parsed.plainSummary) {
-        parsed = createFallbackExplanation();
+    const raw = await generateContentWithFallback({ contents: prompt }, "Civic Feed Explainer");
+    if (raw) {
+      try {
+        const cleanJson = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
+        let parsed = JSON.parse(cleanJson);
+        if (parsed.plainSummary) {
+          return res.json(parsed);
+        }
+      } catch {
+        // use fallback
       }
-      res.json(parsed);
-    } catch (err: any) {
-      const isQuota = err?.status === 429 || String(err?.message || "").includes("429") || String(err?.message || "").includes("RESOURCE_EXHAUSTED");
-      if (isQuota) {
-        console.warn("Gemini rate quota reached; using localized update explanation.");
-      } else {
-        console.warn("AI Explainer warning, using fallback:", err?.message || err);
-      }
-      res.json(createFallbackExplanation());
     }
+
+    res.json(createFallbackExplanation());
   });
 
-  // AI Voice Agent Conversational Profile Extraction & Dynamic Questioning
+  // AI Voice Agent Conversational Profile Extraction & Dynamic Dialogue Manager (Zero Hallucination)
   app.post("/api/voice-agent-turn", async (req, res) => {
     try {
       const {
-        userMessage,
-        currentProfile,
+        userMessage = "",
+        audioBase64 = "",
+        audioMimeType = "audio/webm",
+        currentProfile = {},
         currentLanguage = "bn",
         pendingQuestionKey,
-        conversationHistory,
-      } = req.body;
-      const ai = getGenAI();
+        conversationHistory = [],
+      } = req.body || {};
 
       const langMap: Record<string, string> = {
         bn: "Bengali (বাংলা)",
@@ -485,38 +605,43 @@ Only output the JSON object without markdown fences if possible.`;
       };
       const selectedLanguageName = langMap[currentLanguage] || "Bengali (বাংলা)";
 
-      const prompt = `You are Sahayak, a civic assistance voice agent interviewing a citizen in India to find matching government schemes.
+      let cleanUserMsg = (userMessage || "").trim();
+      let hasSpeech = Boolean(cleanUserMsg);
+      let parsed: any = null;
 
-The citizen's selected language is: ${selectedLanguageName}.
+      // 1. If audio is provided, let Gemini process the audio natively
+      if (audioBase64) {
+        const audioPrompt = `You are Sahayak, an empathetic Indian Digital Public Infrastructure (DPI) conversational AI voice agent helping a citizen find matching government welfare schemes.
 
-CRITICAL ANTI-HALLUCINATION & CONVERSATION RULES:
-1. You are ONLY the interviewer. The citizen is a real person answering one question at a time.
-2. EXTRACT ONLY what the user explicitly said in their latest response: "${userMessage}".
-3. For the question asked ("${pendingQuestionKey || "name"}"), extract ONLY that specific attribute into "extractedFields".
-4. NEVER invent, assume, or auto-fill other attributes that the user has not mentioned.
-5. If the user only said their name (e.g. "Rahul"), extractedFields MUST ONLY be { "name": "Rahul" }.
+The user is speaking in: ${selectedLanguageName}.
+Listen to the user's spoken audio directly.
 
-DYNAMIC QUESTION TREE:
-- Step 1: "name" -> Next: "age"
-- Step 2: "age" -> Next: "occupation"
-- Step 3: "occupation":
-  * If occupation is "Student":
-    - DO NOT immediately ask class. First ask whether they are in School or College/University: "education_level"
-    - If user says School: ask "school_class" ("আপনি কোন ক্লাসে পড়েন?"). Do NOT ask college questions.
-    - If user says College / University: ask "college_course" ("আপনি কোন কোর্স বা ডিগ্রি করছেন?"). Then ask "college_year" ("আপনি এখন কোন বর্ষ বা সেমিস্টারে পড়ছেন?"). Never ask school class.
-    - If user switches (School <-> College), clear conflicting fields and ask the relevant question.
-  * If occupation is "Farmer": ask "income", then "ownsLand".
-  * If other occupation: ask "income".
-- After education/occupation: ask "income", then complete.
-
-Current verified profile so far:
+CURRENT CITIZEN PROFILE:
 ${JSON.stringify(currentProfile, null, 2)}
 
-User's latest message: "${userMessage}"
-Current question just answered: "${pendingQuestionKey || "name"}"
+RECENT CONVERSATION HISTORY:
+${JSON.stringify(conversationHistory.slice(-6), null, 2)}
 
-Respond ONLY with a valid JSON object matching this schema:
+PENDING FIELD BEING ASKED: "${pendingQuestionKey || "name"}"
+
+CRITICAL ANTI-HALLUCINATION RULES:
+1. First evaluate if the user actually spoke meaningful words.
+   - If the audio is silent, background noise, breathing, or empty, set "hasSpeech": false, "userTranscript": "".
+   - Never invent, assume, predict, or autocomplete user speech.
+2. If user spoke:
+   - Transcribe their exact utterance into "userTranscript" in original native script (Bengali / Hindi / English).
+   - Extract ONLY explicit facts mentioned by the user:
+     - Name: only if explicitly stated.
+     - Age: only if number is stated (e.g. "আমার বয়স ২০" -> age: "20").
+     - Occupation: (e.g. "আমি কলেজে পড়ি" -> occupation: "Student", education: { level: "college" }).
+     - NEVER guess course, year, class, income, or land unless explicitly spoken!
+   - Provide a natural, warm conversational reply in the citizen's language (${selectedLanguageName}).
+   - Ask for the next missing piece of information needed for schemes.
+
+Output ONLY valid JSON:
 {
+  "hasSpeech": boolean,
+  "userTranscript": "<exact words in original script>",
   "extractedFields": {
     "name"?: string,
     "age"?: string,
@@ -527,345 +652,756 @@ Respond ONLY with a valid JSON object matching this schema:
     "education"?: {
       "level"?: "school" | "college",
       "class"?: number | string,
-      "board"?: string | null,
       "course"?: string,
       "year"?: number | string,
       "semester"?: number | string
     }
   },
-  "acknowledgment": {
-    "en": "Got it.",
-    "bn": "বুঝেছি।",
-    "hi": "समझ गया।"
-  },
-  "nextQuestion": {
-    "key": "age" | "occupation" | "education_level" | "school_class" | "college_course" | "college_year" | "income" | "ownsLand" | "completed",
-    "textEn": "...",
-    "textBn": "...",
-    "textHi": "...",
-    "suggestedAnswers": ["Option 1", "Option 2"]
-  },
-  "isReadyForResults": false
+  "assistantReply": "<Spoken reply in ${selectedLanguageName}>",
+  "assistantReplyBn": "<Bengali text>",
+  "assistantReplyHi": "<Hindi text>",
+  "assistantReplyEn": "<English text>",
+  "nextQuestionKey": "name" | "age" | "occupation" | "education_level" | "school_class" | "college_course" | "college_year" | "income" | "ownsLand" | "completed",
+  "isReadyForResults": boolean,
+  "suggestedAnswers": ["Option 1", "Option 2"]
 }`;
 
-      let parsed: any = null;
+        const rawAudioResponse = await generateContentWithAudio(audioBase64, audioMimeType, audioPrompt, "Voice Agent Audio Turn");
+        if (rawAudioResponse) {
+          try {
+            parsed = JSON.parse(rawAudioResponse);
+            if (parsed.userTranscript && parsed.userTranscript.trim()) {
+              cleanUserMsg = parsed.userTranscript.trim();
+              hasSpeech = parsed.hasSpeech !== false;
+            } else if (parsed.hasSpeech === false) {
+              hasSpeech = false;
+            }
+          } catch {}
+        }
+      }
 
-      if (ai) {
-        try {
-          const response = await ai.models.generateContent({
-            model: "gemini-3.7-flash",
-            contents: prompt,
-            config: {
-              responseMimeType: "application/json",
-            },
-          });
-          const raw = response.text || "{}";
-          parsed = JSON.parse(raw);
-        } catch (genErr: any) {
-          const isQuota = genErr?.status === 429 || String(genErr?.message || "").includes("429") || String(genErr?.message || "").includes("RESOURCE_EXHAUSTED");
-          if (isQuota) {
-            console.warn("Gemini rate quota reached; using deterministic voice interview state machine.");
+      // If audio had no speech and no text was sent, return clean wait state
+      if (!hasSpeech && !cleanUserMsg) {
+        return res.json({
+          hasSpeech: false,
+          userTranscript: "",
+          assistantReply: "",
+          extractedFields: {},
+          mergedProfile: currentProfile,
+          isReadyForResults: false,
+        });
+      }
+
+      // 2. Run deterministic fact extractor as fallback / validator
+      const deterministicResult = extractUserFactsStrict(cleanUserMsg, currentProfile, pendingQuestionKey, currentLanguage);
+
+      // 3. If text-only mode and not yet parsed by audio
+      if (!parsed) {
+        const textPrompt = `You are Sahayak, an empathetic Indian Digital Public Infrastructure (DPI) conversational AI voice agent helping a citizen find matching government welfare schemes.
+
+The conversation is taking place in: ${selectedLanguageName}.
+
+CURRENT VERIFIED CITIZEN PROFILE:
+${JSON.stringify(currentProfile, null, 2)}
+
+RECENT CONVERSATION HISTORY:
+${JSON.stringify(conversationHistory.slice(-6), null, 2)}
+
+CITIZEN'S LATEST UTTERANCE:
+"${cleanUserMsg}"
+
+STRICT CONVERSATIONAL & ANTI-HALLUCINATION RULES:
+1. USER INPUT MUST BE THE ONLY SOURCE OF FACTS.
+   - Never invent, assume, predict, autocomplete, or fabricate user information.
+   - If the user says "আমি কলেজে পড়ি", only education level = "college" (and occupation = "Student") can be extracted. Course and year are UNKNOWN until explicitly stated.
+   - If the user provides multiple facts in one sentence (e.g. "My name is Rahul, 21 years old, studying B.Sc in 2nd year"), extract ALL of them: name="Rahul", age="21", occupation="Student", education={level:"college", course:"B.Sc.", year:2}.
+   - If the user corrects earlier information (e.g. "Actually I am in class 10 in school, not college"), update accordingly and clear invalidated fields.
+   - If the user asks a question or makes a conversational comment, answer it warmly and empathetically in their language.
+2. DIALOGUE FLOW:
+   - Acknowledge what the user just said in a natural, friendly tone.
+   - Determine what essential information is still missing from the citizen's profile to evaluate welfare schemes (Name -> Age -> Occupation -> School Class OR College Course & Year if Student -> Land ownership if Farmer -> Family annual income).
+   - Ask naturally and conversationally for the next missing piece of information. Do NOT ask for facts already provided.
+   - If all required fields are present, announce that matching schemes are ready and set isReadyForResults to true.
+
+Output ONLY a valid JSON object matching this schema:
+{
+  "extractedFields": {
+    "name"?: string,
+    "age"?: string,
+    "occupation"?: string,
+    "income"?: string,
+    "ownsLand"?: boolean,
+    "landSizeAcres"?: string,
+    "state"?: string,
+    "education"?: {
+      "level"?: "school" | "college",
+      "class"?: number | string,
+      "course"?: string,
+      "year"?: number | string,
+      "semester"?: number | string
+    }
+  },
+  "clearedFields"?: string[],
+  "assistantReply": "<Conversational reply in target language>",
+  "assistantReplyBn": "<Conversational reply in Bengali>",
+  "assistantReplyHi": "<Conversational reply in Hindi>",
+  "assistantReplyEn": "<Conversational reply in English>",
+  "nextQuestionKey": "name" | "age" | "occupation" | "education_level" | "school_class" | "college_course" | "college_year" | "income" | "ownsLand" | "completed",
+  "isReadyForResults": boolean,
+  "suggestedAnswers": ["Option 1", "Option 2"]
+}`;
+
+        const raw = await generateContentWithFallback({
+          contents: textPrompt,
+          config: { responseMimeType: "application/json" },
+        }, "Voice Agent Turn");
+
+        if (raw) {
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            parsed = null;
+          }
+        }
+      }
+
+      // Merge and sanitize facts: user facts must ONLY be genuine extracts
+      const finalExtracted: Record<string, any> = {};
+
+      if (parsed?.extractedFields && typeof parsed.extractedFields === "object") {
+        for (const [key, val] of Object.entries(parsed.extractedFields)) {
+          if (val !== undefined && val !== null && val !== "") {
+            if (key === "education" && typeof val === "object") {
+              const eduVal = val as any;
+              const sanitizedEdu: Record<string, any> = {};
+              if (eduVal.level === "school" || eduVal.level === "college") sanitizedEdu.level = eduVal.level;
+              if (eduVal.class) sanitizedEdu.class = eduVal.class;
+              if (eduVal.course) sanitizedEdu.course = eduVal.course;
+              if (eduVal.year) sanitizedEdu.year = eduVal.year;
+              if (eduVal.semester) sanitizedEdu.semester = eduVal.semester;
+              if (Object.keys(sanitizedEdu).length > 0) finalExtracted.education = sanitizedEdu;
+            } else {
+              finalExtracted[key] = val;
+            }
+          }
+        }
+      }
+
+      // Overlay deterministic facts
+      if (deterministicResult.extractedFields) {
+        for (const [key, val] of Object.entries(deterministicResult.extractedFields)) {
+          if (key === "education" && typeof val === "object") {
+            finalExtracted.education = {
+              ...(finalExtracted.education || {}),
+              ...(val as any),
+            };
           } else {
-            console.warn("Gemini voice turn warning, using state machine fallback:", genErr?.message || genErr);
+            finalExtracted[key] = val;
           }
-          parsed = null;
         }
       }
 
-      // If Gemini returned or if fallback is needed, run server-side deterministic verification
-      const fallbackResult = createFallbackAgentTurn(userMessage, currentProfile, pendingQuestionKey, currentLanguage);
-
-      if (!parsed || !parsed.nextQuestion) {
-        parsed = fallbackResult;
-      } else {
-        // Strict Server-Side Sanitization of AI output
-        const safeExtracted: Record<string, any> = {};
-
-        if (pendingQuestionKey === "name" || pendingQuestionKey === "initial" || !currentProfile?.name) {
-          if (parsed.extractedFields?.name) safeExtracted.name = parsed.extractedFields.name;
-          else if (fallbackResult.extractedFields.name) safeExtracted.name = fallbackResult.extractedFields.name;
-        } else if (pendingQuestionKey === "age") {
-          if (parsed.extractedFields?.age) safeExtracted.age = parsed.extractedFields.age;
-          else if (fallbackResult.extractedFields.age) safeExtracted.age = fallbackResult.extractedFields.age;
-        } else if (pendingQuestionKey === "occupation") {
-          if (parsed.extractedFields?.occupation) safeExtracted.occupation = parsed.extractedFields.occupation;
-          else if (fallbackResult.extractedFields.occupation) safeExtracted.occupation = fallbackResult.extractedFields.occupation;
-          if (fallbackResult.extractedFields.education) safeExtracted.education = fallbackResult.extractedFields.education;
-        } else if (pendingQuestionKey === "education_level" || pendingQuestionKey === "school_class" || pendingQuestionKey === "college_course" || pendingQuestionKey === "college_year") {
-          if (fallbackResult.extractedFields.education) {
-            safeExtracted.education = fallbackResult.extractedFields.education;
-          } else if (parsed.extractedFields?.education) {
-            safeExtracted.education = parsed.extractedFields.education;
-          }
-        } else if (pendingQuestionKey === "income") {
-          if (parsed.extractedFields?.income) safeExtracted.income = parsed.extractedFields.income;
-          else if (fallbackResult.extractedFields.income) safeExtracted.income = fallbackResult.extractedFields.income;
-        } else if (pendingQuestionKey === "ownsLand") {
-          if (parsed.extractedFields?.ownsLand !== undefined) safeExtracted.ownsLand = parsed.extractedFields.ownsLand;
-          else if (fallbackResult.extractedFields.ownsLand !== undefined) safeExtracted.ownsLand = fallbackResult.extractedFields.ownsLand;
-        }
-
-        parsed.extractedFields = safeExtracted;
-
-        // Force deterministic next question step to strictly honor required tree
-        parsed.nextQuestion = fallbackResult.nextQuestion;
-        parsed.isReadyForResults = fallbackResult.isReadyForResults;
+      // Compute resulting profile
+      let mergedProfile = { ...currentProfile, ...finalExtracted };
+      if (finalExtracted.education) {
+        mergedProfile.education = {
+          ...(currentProfile.education || {}),
+          ...finalExtracted.education,
+        };
       }
 
-      res.json(parsed);
+      // Cleared fields management
+      if (finalExtracted.education?.level === "school" && currentProfile.education?.level === "college") {
+        mergedProfile.education = {
+          level: "school",
+          class: finalExtracted.education.class || null,
+          board: null,
+        };
+      }
+      if (finalExtracted.education?.level === "college" && currentProfile.education?.level === "school") {
+        mergedProfile.education = {
+          level: "college",
+          course: finalExtracted.education.course || null,
+          year: finalExtracted.education.year || null,
+          semester: finalExtracted.education.semester || null,
+        };
+      }
+
+      const isComplete = isProfileFullyReady(mergedProfile);
+      const nextMissingKey = determineNextMissingField(mergedProfile);
+
+      const assistantReply =
+        currentLanguage === "bn"
+          ? (parsed?.assistantReplyBn || parsed?.assistantReply || deterministicResult.nextQuestion.textBn)
+          : currentLanguage === "hi"
+          ? (parsed?.assistantReplyHi || parsed?.assistantReply || deterministicResult.nextQuestion.textHi)
+          : (parsed?.assistantReplyEn || parsed?.assistantReply || deterministicResult.nextQuestion.textEn);
+
+      // Pre-synthesize high quality female TTS audio for zero playback delay
+      const assistantAudioBase64 = await generateAndCacheAudio(assistantReply, "Kore");
+
+      console.log(`VOICE INPUT RECEIVED: "${cleanUserMsg}"`);
+      console.log(`GEMINI RESPONSE: "${assistantReply}"`);
+      console.log(`[Conversation Facts] Extracted: ${JSON.stringify(finalExtracted)} | Profile: ${JSON.stringify(mergedProfile)}`);
+
+      const responsePayload = {
+        hasSpeech: true,
+        userTranscript: cleanUserMsg,
+        extractedFields: finalExtracted,
+        mergedProfile,
+        assistantReply,
+        assistantReplyBn: parsed?.assistantReplyBn || deterministicResult.nextQuestion.textBn,
+        assistantReplyHi: parsed?.assistantReplyHi || deterministicResult.nextQuestion.textHi,
+        assistantReplyEn: parsed?.assistantReplyEn || deterministicResult.nextQuestion.textEn,
+        assistantAudioBase64: assistantAudioBase64 || null,
+        nextQuestion: {
+          key: isComplete ? "completed" : nextMissingKey,
+          textEn: parsed?.assistantReplyEn || deterministicResult.nextQuestion.textEn,
+          textBn: parsed?.assistantReplyBn || deterministicResult.nextQuestion.textBn,
+          textHi: parsed?.assistantReplyHi || deterministicResult.nextQuestion.textHi,
+          suggestedAnswers: parsed?.suggestedAnswers || deterministicResult.nextQuestion.suggestedAnswers || [],
+        },
+        isReadyForResults: isComplete,
+        debug: {
+          userMessage: cleanUserMsg,
+          assistantReply,
+          extractedFacts: finalExtracted,
+          currentProfile: mergedProfile,
+          autoGeneratedUserInput: false,
+          demoInput: false,
+          language: currentLanguage,
+        },
+      };
+
+      res.json(responsePayload);
     } catch (err: any) {
       console.error("AI Voice Agent Turn Error:", err);
-      res.json(createFallbackAgentTurn(req.body?.userMessage, req.body?.currentProfile, req.body?.pendingQuestionKey, req.body?.currentLanguage));
+      const fallback = extractUserFactsStrict(req.body?.userMessage, req.body?.currentProfile, req.body?.pendingQuestionKey, req.body?.currentLanguage);
+      res.json(fallback);
     }
   });
 
-  // Client / Server fallback rule engine
-  function createFallbackAgentTurn(
+  // Track 1 — AI Citizen Development Request Processor & Classifier
+  app.post("/api/process-development-request", async (req, res) => {
+    const { text = "", language = "bn", location = {}, source = "voice", citizenName } = req.body || {};
+
+    const createFallbackClassification = () => {
+      const lower = text.toLowerCase();
+      let category = "other";
+      let urgency = "medium";
+      let affectedPopulation = "community";
+      let problem = text || "Citizen reported development need";
+
+      if (lower.includes("হাসপাতাল") || lower.includes("ডাক্তার") || lower.includes("চিকিৎসা") || lower.includes("hospital") || lower.includes("doctor") || lower.includes("अस्पताल") || lower.includes("स्वास्थ्य")) {
+        category = "healthcare";
+        urgency = "high";
+        problem = "Inadequate local healthcare facility, doctor deficit, or missing emergency care.";
+      } else if (lower.includes("রাস্তা") || lower.includes("সেতু") || lower.includes("road") || lower.includes("bridge") || lower.includes("सड़क") || lower.includes("पुल")) {
+        category = "roads";
+        urgency = "high";
+        problem = "Damaged, unpaved or washed-out road and bridge connectivity.";
+      } else if (lower.includes("জল") || lower.includes("পানি") || lower.includes("আর্সেনিক") || lower.includes("water") || lower.includes("drinking") || lower.includes("पानी")) {
+        category = "drinking_water";
+        urgency = "high";
+        problem = "Lack of clean drinking water, pipeline connections, or water contamination.";
+      } else if (lower.includes("স্কুল") || lower.includes("বিদ্যালয়") || lower.includes("school") || lower.includes("education") || lower.includes("स्कूल")) {
+        category = "schools_education";
+        problem = "School infrastructure deficit, missing digital classrooms or teachers.";
+      } else if (lower.includes("বিদ্যুৎ") || lower.includes("কারেন্ট") || lower.includes("electricity") || lower.includes("बिजली")) {
+        category = "electricity";
+        problem = "Frequent power outages, voltage fluctuations, or missing transformer.";
+      } else if (lower.includes("সেচ") || lower.includes("খাল") || lower.includes("irrigation") || lower.includes("canal") || lower.includes("सिंचाई")) {
+        category = "irrigation";
+        problem = "Lack of agricultural canal water, siltation, or need for lift irrigation.";
+      } else if (lower.includes("ড্রেন") || lower.includes("নিকাশি") || lower.includes("drain") || lower.includes("flood") || lower.includes("जलभराव")) {
+        category = "drainage_flood";
+        urgency = "high";
+        problem = "Stormwater drainage blockages and seasonal waterlogging.";
+      }
+
+      let detectedCity = location?.city || "Balurghat";
+      let detectedDistrict = location?.district || "Dakshin Dinajpur";
+      let detectedState = location?.state || "West Bengal";
+
+      if (lower.includes("balurghat") || lower.includes("বালুরঘাট") || lower.includes("बालुरघाट")) {
+        detectedCity = "Balurghat";
+        detectedDistrict = "Dakshin Dinajpur";
+      } else if (lower.includes("purulia") || lower.includes("পুরুলিয়া") || lower.includes("पुरुलिया")) {
+        detectedCity = "Baghmundi";
+        detectedDistrict = "Purulia";
+      } else if (lower.includes("malda") || lower.includes("মালদা") || lower.includes("मालदा")) {
+        detectedCity = "Kaliachak";
+        detectedDistrict = "Malda";
+      } else if (lower.includes("siliguri") || lower.includes("শিলিগুড়ি") || lower.includes("darjeeling")) {
+        detectedCity = "Siliguri";
+        detectedDistrict = "Darjeeling";
+      } else if (lower.includes("gaya") || lower.includes("गया")) {
+        detectedCity = "Gaya";
+        detectedDistrict = "Gaya";
+        detectedState = "Bihar";
+      } else if (lower.includes("varanasi") || lower.includes("वाराणसी")) {
+        detectedCity = "Varanasi";
+        detectedDistrict = "Varanasi";
+        detectedState = "Uttar Pradesh";
+      }
+
+      return {
+        requestId: `REQ-${Date.now()}`,
+        language,
+        originalText: text,
+        category,
+        subCategory: `${category}_need`,
+        location: {
+          country: "India",
+          state: detectedState,
+          district: detectedDistrict,
+          city: detectedCity,
+          locality: location?.locality || "",
+        },
+        problem,
+        urgency,
+        affectedPopulation,
+        citizenSuggestedSolution: null,
+        timestamp: "Just now",
+        source: source || "voice",
+        verifiedStatus: "verified",
+        citizenName: citizenName || "Citizen Contributor",
+      };
+    };
+
+    const prompt = `You are the Sahayak AI Classifier for Track 1 Digital Public Infrastructure & Governance (BRICS Innovation).
+Citizen statement: "${text}"
+Target language: ${language}
+Provided location context: ${JSON.stringify(location || {})}
+
+Classify into one category from:
+[healthcare, roads, public_transport, drinking_water, sanitation, electricity, internet_connectivity, schools_education, public_safety, waste_management, drainage_flood, housing, agriculture_infrastructure, irrigation, employment_infrastructure, government_services, other]
+
+Return ONLY a valid JSON object matching:
+{
+  "category": "healthcare" | "roads" | "drinking_water" | "schools_education" | "electricity" | "irrigation" | "drainage_flood" | "public_transport" | "waste_management" | "public_safety" | "other",
+  "subCategory": "<short subcategory key>",
+  "problem": "<concise 1-sentence description of the core problem>",
+  "urgency": "low" | "medium" | "high" | "critical",
+  "affectedPopulation": "individual" | "neighborhood" | "community" | "entire_region",
+  "location": {
+    "country": "India",
+    "state": "<State name>",
+    "district": "<District name>",
+    "city": "<City/Town or best inferred location>"
+  },
+  "citizenSuggestedSolution": "<Specific solution if suggested, else null>"
+}`;
+
+    const raw = await generateContentWithFallback({
+      contents: prompt,
+      config: { responseMimeType: "application/json" },
+    }, "Dev Request Classifier");
+
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed.category) {
+          return res.json({
+            requestId: `REQ-${Date.now()}`,
+            language,
+            originalText: text,
+            category: parsed.category,
+            subCategory: parsed.subCategory || `${parsed.category}_need`,
+            location: {
+              country: parsed.location?.country || "India",
+              state: parsed.location?.state || location?.state || "West Bengal",
+              district: parsed.location?.district || location?.district || "Dakshin Dinajpur",
+              city: parsed.location?.city || location?.city || "Balurghat",
+              locality: location?.locality || "",
+            },
+            problem: parsed.problem || text,
+            urgency: parsed.urgency || "medium",
+            affectedPopulation: parsed.affectedPopulation || "community",
+            citizenSuggestedSolution: parsed.citizenSuggestedSolution || null,
+            timestamp: "Just now",
+            source: source || "voice",
+            verifiedStatus: "verified",
+            citizenName: citizenName || "Citizen Contributor",
+          });
+        }
+      } catch {}
+    }
+
+    res.json(createFallbackClassification());
+  });
+
+  // Track 1 — Conversational Development Need Voice Interview Agent
+  app.post("/api/development-agent-turn", async (req, res) => {
+    const {
+      userMessage = "",
+      audioBase64 = "",
+      audioMimeType = "audio/webm",
+      currentLanguage = "bn",
+      conversationStep = 1,
+      collectedData = {},
+      conversationHistory = [],
+    } = req.body || {};
+
+    let cleanUserMsg = (userMessage || "").trim();
+
+    // If audio is provided, use Gemini Native Audio Understanding
+    if (!cleanUserMsg && audioBase64) {
+      try {
+        const audioPrompt = `You are Sahayak, an Indian Digital Public Infrastructure voice agent listening to a citizen speaking in Bengali, Hindi, or English about local infrastructure needs.
+1. Transcribe the citizen's exact words into userTranscript in original native script (Bengali / Hindi / English).
+2. If silent/background noise with no words spoken, set hasSpeech: false and userTranscript: "".
+Output JSON: { "hasSpeech": boolean, "userTranscript": string }`;
+
+        const rawAudio = await generateContentWithAudio(audioBase64, audioMimeType, audioPrompt, "Dev Audio Understanding");
+        if (rawAudio) {
+          try {
+            const p = JSON.parse(rawAudio);
+            if (p.userTranscript && p.userTranscript.trim()) {
+              cleanUserMsg = p.userTranscript.trim();
+            } else if (p.hasSpeech === false) {
+              return res.json({
+                hasSpeech: false,
+                userTranscript: "",
+                replyText: "",
+                message: "No speech recognized",
+              });
+            }
+          } catch {}
+        }
+      } catch (audioErr) {
+        console.warn("Gemini development audio understanding notice:", audioErr);
+      }
+    }
+
+    const prompt = `You are Sahayak, an empathetic civic voice agent interviewing an Indian citizen about a public development need, civic issue, or local infrastructure problem for Digital Public Infrastructure (Track 1 DPI).
+
+Citizen statement: "${cleanUserMsg}"
+Selected Language: ${currentLanguage}
+Current Step: ${conversationStep}
+Collected data so far: ${JSON.stringify(collectedData || {})}
+Recent conversation history: ${JSON.stringify(conversationHistory.slice(-4))}
+
+CONVERSATIONAL RULES:
+1. UNDERSTAND WHAT THE CITIZEN SAYS:
+   - Extract problem category, specific issue description, location (city/district), urgency, and community scope ONLY from what the user explicitly said.
+   - Never invent facts.
+2. DYNAMIC CONVERSATION:
+   - If location (city/village) was NOT mentioned yet in collectedData or userMessage, acknowledge their problem empathetically and ask for their area/locality name.
+   - If location IS already known but community scope is unclear, ask how many people/households are affected or if it is an urgent hazard.
+   - If sufficient details (issue + location) are recorded, warmly confirm that the development request is structured and aggregated onto the Policymaker Dashboard for priority ranking. Set isComplete = true.
+
+Respond ONLY with a valid JSON matching:
+{
+  "extracted": {
+    "category": "<healthcare | roads | drinking_water | schools_education | electricity | irrigation | drainage_flood | public_transport | waste_management | public_safety | other>",
+    "problem": "<short clear description>",
+    "location": { "city": "<city/village if mentioned>", "district": "<district if mentioned>", "state": "<state if mentioned>" },
+    "urgency": "high" | "medium" | "low" | "critical",
+    "affectedPopulation": "individual" | "neighborhood" | "community" | "entire_region"
+  },
+  "replyText": "<Target language spoken response>",
+  "replyTextBn": "<Bengali text>",
+  "replyTextHi": "<Hindi text>",
+  "replyTextEn": "<English text>",
+  "nextStep": number,
+  "isComplete": boolean,
+  "suggestedAnswers": ["option 1", "option 2"]
+}`;
+
+    const raw = await generateContentWithFallback({
+      contents: prompt,
+      config: { responseMimeType: "application/json" },
+    }, "Dev Voice Agent Turn");
+
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed.replyText) {
+          console.log(`[Conversation Debug]
+User Message: "${cleanUserMsg}"
+Assistant Reply: "${parsed.replyText}"
+Extracted Dev Facts: ${JSON.stringify(parsed.extracted)}
+AUTO-GENERATED USER INPUT: false
+DEMO INPUT: false`);
+
+          let assistantAudioBase64: string | null = null;
+          try {
+            assistantAudioBase64 = await generateAndCacheAudio(parsed.replyText, "Kore");
+          } catch {}
+
+          return res.json({
+            ...parsed,
+            hasSpeech: true,
+            userTranscript: cleanUserMsg,
+            assistantAudioBase64,
+          });
+        }
+      } catch {}
+    }
+
+    // Deterministic fallback turn for Track 1
+    const isBn = currentLanguage === "bn";
+    const isHi = currentLanguage === "hi";
+    const lower = cleanUserMsg.toLowerCase();
+
+    const localClass = classifyCitizenTextLocally(cleanUserMsg);
+    const hasLocation = Boolean(
+      collectedData.location?.city ||
+      lower.includes("balurghat") || lower.includes("বালুরঘাট") ||
+      lower.includes("purulia") || lower.includes("পুরুলিয়া") ||
+      lower.includes("malda") || lower.includes("মালদা") ||
+      lower.includes("siliguri") || lower.includes("শিলিগুড়ি") ||
+      lower.includes("kolkata") || lower.includes("কলকাতা") ||
+      lower.includes("gaya") || lower.includes("varanasi")
+    );
+
+    if (!hasLocation && conversationStep === 1) {
+      const fallbackReply = isBn ? "বুঝেছি। আপনার এলাকার নাম বা লোকেশনটা জানাবেন?" : isHi ? "समझ गया। क्या आप अपने क्षेत्र या स्थान का नाम बताएँगे?" : "Got it. Could you tell me the name of your area or location?";
+      let assistantAudioBase64: string | null = null;
+      try {
+        assistantAudioBase64 = await generateAndCacheAudio(fallbackReply, "Kore");
+      } catch {}
+
+      return res.json({
+        hasSpeech: true,
+        userTranscript: cleanUserMsg,
+        assistantAudioBase64,
+        extracted: { problem: cleanUserMsg, category: localClass.category },
+        replyText: fallbackReply,
+        replyTextBn: "বুঝেছি। আপনার এলাকার নাম বা লোকেশনটা জানাবেন?",
+        replyTextHi: "समझ गया। क्या आप अपने क्षेत्र या स्थान का नाम बताएँगे?",
+        replyTextEn: "Got it. Could you tell me the name of your area or location?",
+        nextStep: 2,
+        isComplete: false,
+        suggestedAnswers: isBn ? ["বালুরঘাট", "পুরুলিয়া", "মালদা", "অন্যান্য এলাকা"] : isHi ? ["बालुरघाट", "पुरुलिया", "मालदा", "अन्य क्षेत्र"] : ["Balurghat", "Purulia", "Malda", "Other Location"],
+      });
+    }
+
+    if (conversationStep === 2) {
+      const fallbackReply = isBn ? "এই সমস্যাটি কি আপনার এলাকার অনেক মানুষকেই প্রভাবিত করছে?" : isHi ? "क्या यह समस्या आपके क्षेत्र के कई लोगों को प्रभावित कर रही है?" : "Is this issue affecting many people in your community?";
+      let assistantAudioBase64: string | null = null;
+      try {
+        assistantAudioBase64 = await generateAndCacheAudio(fallbackReply, "Kore");
+      } catch {}
+
+      return res.json({
+        hasSpeech: true,
+        userTranscript: cleanUserMsg,
+        assistantAudioBase64,
+        extracted: { location: { city: cleanUserMsg } },
+        replyText: fallbackReply,
+        replyTextBn: "এই সমস্যাটি কি আপনার এলাকার অনেক মানুষকেই প্রভাবিত করছে?",
+        replyTextHi: "क्या यह समस्या आपके क्षेत्र के कई लोगों को प्रभावित कर रही है?",
+        replyTextEn: "Is this issue affecting many people in your community?",
+        nextStep: 3,
+        isComplete: false,
+        suggestedAnswers: isBn ? ["হ্যাঁ, পুরো এলাকা প্রভাবিত", "কয়েকটি পরিবার", "অত্যন্ত জরুরি"] : isHi ? ["हाँ, पूरा क्षेत्र प्रभावित है", "कुछ परिवार", "अत्यंत आवश्यक"] : ["Yes, whole community", "A few households", "Extremely urgent"],
+      });
+    }
+
+    const fallbackReply = isBn ? "ধন্যবাদ। আপনার এলাকার উন্নয়ন সংক্রান্ত অনুরোধটি নথিভুক্ত করা হয়েছে এবং পলিসি ড্যাশবোর্ডে যুক্ত হয়েছে।" : isHi ? "धन्यवाद। आपके क्षेत्र की विकास संबंधी आवश्यकता दर्ज कर ली गई है और पॉलिसी डैशबोर्ड में जुड़ गई है।" : "Thank you. Your development need has been recorded and added to the DPI aggregation engine and policymaker dashboard.";
+    let assistantAudioBase64: string | null = null;
+    try {
+      assistantAudioBase64 = await generateAndCacheAudio(fallbackReply, "Kore");
+    } catch {}
+
+    return res.json({
+      hasSpeech: true,
+      userTranscript: cleanUserMsg,
+      assistantAudioBase64,
+      extracted: { affectedPopulation: "community", urgency: "high" },
+      replyText: fallbackReply,
+      replyTextBn: "ধন্যবাদ। আপনার এলাকার উন্নয়ন সংক্রান্ত অনুরোধটি নথিভুক্ত করা হয়েছে এবং পলিসি ড্যাশবোর্ডে যুক্ত হয়েছে।",
+      replyTextHi: "धन्यवाद। आपके क्षेत्र की विकास संबंधी आवश्यकता दर्ज कर ली गई है और पॉलिसी डैशबोर्ड में जुड़ गई है।",
+      replyTextEn: "Thank you. Your development need has been recorded and added to the DPI aggregation engine and policymaker dashboard.",
+      nextStep: 4,
+      isComplete: true,
+      suggestedAnswers: isBn ? ["ড্যাশবোর্ড দেখুন", "আরেকটি সমস্যা জানান"] : isHi ? ["डैशबोर्ड देखें", "दूसरी समस्या दर्ज करें"] : ["View Dashboard", "Report Another Need"],
+    });
+  });
+
+  // Local helper functions for zero-hallucination fact extraction
+  function isProfileFullyReady(p: any): boolean {
+    if (!p) return false;
+    const hasName = Boolean(p.name && String(p.name).trim().length > 0);
+    const hasAge = Boolean(p.age && String(p.age).trim().length > 0);
+    const hasOcc = Boolean(p.occupation && String(p.occupation).trim().length > 0);
+    const hasInc = Boolean(p.income && String(p.income).trim().length > 0);
+
+    if (!hasName || !hasAge || !hasOcc || !hasInc) return false;
+
+    const occLower = (p.occupation || "").toLowerCase();
+    const isStudent = occLower.includes("student") || occLower.includes("study") || occLower.includes("college") || occLower.includes("school") || occLower.includes("ছাত্র");
+    if (isStudent) {
+      if (!p.education?.level) return false;
+      if (p.education.level === "school" && (!p.education.class || String(p.education.class).trim().length === 0)) return false;
+      if (p.education.level === "college" && (!p.education.course || String(p.education.course).trim().length === 0)) return false;
+    }
+
+    const isFarmer = occLower.includes("farmer") || occLower.includes("কৃষক") || occLower.includes("किसान");
+    if (isFarmer && p.ownsLand === undefined) return false;
+
+    return true;
+  }
+
+  function determineNextMissingField(p: any): string {
+    if (!p.name || !String(p.name).trim()) return "name";
+    if (!p.age || !String(p.age).trim()) return "age";
+    if (!p.occupation || !String(p.occupation).trim()) return "occupation";
+
+    const occLower = (p.occupation || "").toLowerCase();
+    const isStudent = occLower.includes("student") || occLower.includes("study") || occLower.includes("college") || occLower.includes("school") || occLower.includes("ছাত্র");
+    if (isStudent) {
+      if (!p.education?.level) return "education_level";
+      if (p.education.level === "school" && (!p.education.class || String(p.education.class).trim().length === 0)) return "school_class";
+      if (p.education.level === "college" && (!p.education.course || String(p.education.course).trim().length === 0)) return "college_course";
+      if (p.education.level === "college" && !p.education.year && !p.education.semester) return "college_year";
+    }
+
+    if (!p.income || !String(p.income).trim()) return "income";
+
+    const isFarmer = occLower.includes("farmer") || occLower.includes("কৃষক") || occLower.includes("किसान");
+    if (isFarmer && p.ownsLand === undefined) return "ownsLand";
+
+    return "completed";
+  }
+
+  function extractUserFactsStrict(
     userMessage: string = "",
-    profile: any = {},
+    currentProfile: any = {},
     pendingKey: string = "name",
     lang: string = "bn"
   ) {
     const cleanMsg = (userMessage || "").trim();
     const newlyExtracted: Record<string, any> = {};
 
-    // Helper to extract education details
-    const extractClass = (text: string): number | string | null => {
-      // Numbers
-      const numMatch = text.match(/\b(class|শ্রেণি|ক্লাস|कक्षा)?\s*([1-9]|1[0-2])(?:th|st|nd|rd)?\b/i);
-      if (numMatch && numMatch[2]) return parseInt(numMatch[2], 10);
-      const pureNum = text.match(/\b([1-9]|1[0-2])\b/);
-      if (pureNum) return parseInt(pureNum[1], 10);
-
-      // Bengali ordinal/word classes
-      if (/দশম|ten|10/i.test(text)) return 10;
-      if (/একাদশ|eleven|11/i.test(text)) return 11;
-      if (/দ্বাদশ|twelve|12/i.test(text)) return 12;
-      if (/নবম|nine|9/i.test(text)) return 9;
-      if (/অষ্টম|eight|8/i.test(text)) return 8;
-      if (/সপ্তম|seven|7/i.test(text)) return 7;
-      if (/ষষ্ঠ|six|6/i.test(text)) return 6;
-      if (/পঞ্চম|five|5/i.test(text)) return 5;
-
-      // Hindi
-      if (/दसवीं/i.test(text)) return 10;
-      if (/ग्यारहवीं/i.test(text)) return 11;
-      if (/बारहवीं/i.test(text)) return 12;
-      if (/नौवीं/i.test(text)) return 9;
-      if (/आठवीं/i.test(text)) return 8;
-
-      if (text.length > 0 && text.length <= 15) return text;
-      return null;
-    };
-
-    const extractCourse = (text: string): string => {
-      if (/b\.?sc|bsc|বিএসসি/i.test(text)) return "B.Sc.";
-      if (/b\.?a\b|ba\b|বিএ\b/i.test(text)) return "B.A.";
-      if (/b\.?tech|btech|b\.?e\b|engineering|ইঞ্জিনিয়ারিং/i.test(text)) return "B.Tech";
-      if (/b\.?com|bcom|বিকম/i.test(text)) return "B.Com";
-      if (/diploma|iti|polytechnic|ডিপ্লোমা|আইটিআই/i.test(text)) return "Diploma / ITI";
-      if (/m\.?sc|msc|এমএসসি/i.test(text)) return "M.Sc.";
-      if (/m\.?a\b|ma\b|এমএ/i.test(text)) return "M.A.";
-      if (/mbbs|bds|medical|মেডিকেল|doctor/i.test(text)) return "MBBS";
-      if (/bba|mba/i.test(text)) return "BBA / MBA";
-      if (/bed|b\.ed/i.test(text)) return "B.Ed";
-      if (/llb|law/i.test(text)) return "LLB (Law)";
-
-      // Remove conversational prefix
-      const cleaned = text
-        .replace(/^(i am doing|i study|ami|amar|main|mai|kar raha hu|korchi|আমি|করছি|হচ্ছে)\s*/i, "")
-        .replace(/(korchi|kori|kar raha hu|padh raha hu|করছি|পড়ি|পড়ছি|হচ্ছে)$/i, "")
-        .trim();
-      return cleaned || "B.A.";
-    };
-
-    const extractYear = (text: string): number | string => {
-      if (/1st|first|প্রথম|১ম|पहला|1/i.test(text)) return 1;
-      if (/2nd|second|দ্বিতীয়|২য়|दूसरा|2/i.test(text)) return 2;
-      if (/3rd|third|তৃতীয়|৩য়|तीसरा|3/i.test(text)) return 3;
-      if (/4th|fourth|final|চতুর্থ|৪র্থ|चौथा|अंतिम|4/i.test(text)) return 4;
-      return text || 1;
-    };
-
-    // 1. Name extraction
-    if (pendingKey === "name" || pendingKey === "initial" || !profile?.name) {
-      const nameMatch = cleanMsg
-        .replace(/^(my name is|i am|amar naam|mera naam|naam|আমার নাম|मेरा नाम|নাম|नाम)\s*:?/i, "")
-        .replace(/[,।\n].*$/, "")
-        .trim();
-      if (nameMatch) {
-        newlyExtracted.name = nameMatch;
+    // 1. Strict Multi-Fact Extractor:
+    // Name
+    const nameMatch = cleanMsg.match(/(?:আমার নাম|मेरा नाम|my name is|i am|amar naam|mera naam|naam|নাম|नाम)\s*:?\s*([A-Za-z\u0980-\u09FF\u0900-\u097F\s]{2,25})/i);
+    if (nameMatch && nameMatch[1] && !/কৃষক|ছাত্র|farmer|student|বছর|साल|age/i.test(nameMatch[1])) {
+      newlyExtracted.name = nameMatch[1].trim();
+    } else if ((pendingKey === "name" || pendingKey === "initial" || !currentProfile?.name) && cleanMsg.length > 1 && cleanMsg.length <= 25) {
+      if (!/\b(student|farmer|study|কৃষক|ছাত্র|স্কুল|কলেজ|\d+)\b/i.test(cleanMsg)) {
+        newlyExtracted.name = cleanMsg.replace(/^(আমার নাম|मेरा नाम|my name is|i am)\s*/i, "").trim();
       }
-      const volunteeredAge = cleanMsg.match(/(?:বয়স|उम्र|age|years old|yr|বছর|साल)?\s*(\b\d{1,2}\b)\s*(?:years old|yr|বছর|साल)?/i);
-      if (volunteeredAge && volunteeredAge[1] && cleanMsg.length > 5 && !/^\d+$/.test(nameMatch)) {
-        newlyExtracted.age = volunteeredAge[1];
+    }
+
+    // Age
+    const ageMatch = cleanMsg.match(/(?:বয়স|উমর|उम्र|age|years old|yr|বছর|साल)?\s*(\b\d{1,2}\b)\s*(?:years old|yr|বছর|साल|বয়স|উমর|বয়স|उम्र)?/i);
+    if (ageMatch && ageMatch[1] && parseInt(ageMatch[1], 10) >= 5 && parseInt(ageMatch[1], 10) <= 110) {
+      newlyExtracted.age = ageMatch[1];
+    } else {
+      if (/কুড়ি|বিস|twenty|20/i.test(cleanMsg)) newlyExtracted.age = "20";
+      else if (/পঁচিশ|पच्चीस|twenty five|25/i.test(cleanMsg)) newlyExtracted.age = "25";
+      else if (/তিরিশ|तीस|thirty|30/i.test(cleanMsg)) newlyExtracted.age = "30";
+      else if (/পঁয়ত্রিশ|पैंतीस|thirty five|35/i.test(cleanMsg)) newlyExtracted.age = "35";
+      else if (/চল্লিশ|चालीस|forty|40/i.test(cleanMsg)) newlyExtracted.age = "40";
+      else if (/পঞ্চাশ|पचास|fifty|50/i.test(cleanMsg)) newlyExtracted.age = "50";
+      else if (/ষাট|साठ|sixty|60/i.test(cleanMsg)) newlyExtracted.age = "60";
+    }
+
+    // Occupation
+    if (/student|study|college|school|porashona|pori|ছাত্র|ছাত্রী|छात्र|छात्रा|पढाई|পড়াশোনা|পড়াশোনা|বিশ্ববিদ্যালয়/i.test(cleanMsg)) {
+      newlyExtracted.occupation = "Student";
+    } else if (/farmer|krishi|chash|kisan|kheti|কৃষক|কৃষি|চাষ|চাষী|किसान|खेती/i.test(cleanMsg)) {
+      newlyExtracted.occupation = "Farmer";
+    } else if (/business|shop|dokandar|byabsa|ব্যবসা|দোকান|व्यापार|दुकान/i.test(cleanMsg)) {
+      newlyExtracted.occupation = "Self-Employed / Business";
+    } else if (/artisan|craftsman|karigar|tailor|carpenter|weaver|কারিগর|তাঁতি|कारीगर/i.test(cleanMsg)) {
+      newlyExtracted.occupation = "Artisan / Craftsman";
+    } else if (/labor|labour|din majur|দিনমজুর|मजदूर|श्रमिक/i.test(cleanMsg)) {
+      newlyExtracted.occupation = "Daily Wage Worker";
+    }
+
+    // Education (ONLY if Student or Education is mentioned)
+    const isStudentUtterance =
+      newlyExtracted.occupation === "Student" ||
+      currentProfile.occupation === "Student" ||
+      /student|study|college|school|class|শ্রেণি|কোর্স|বিএসসি|বিএ|school|কলেজ|স্কুল/i.test(cleanMsg);
+
+    if (isStudentUtterance) {
+      const isCollege = /college|university|varsity|কলেজ|বিশ্ববিদ্যালয়|कॉलेज|यूनिवर्सिटी|b\.?sc|b\.?a|b\.?tech|b\.?com|diploma|iti|m\.?a|m\.?sc|mbbs|degree/i.test(cleanMsg);
+      const isSchool = /school|স্কুল|স্কুলে|স্কুলে পড়ি|স্কুল ছাত্র|स्कूल|class|শ্রেণি|দশম|একাদশ|দ্বাদশ/i.test(cleanMsg) && !isCollege;
+
+      if (isSchool) {
+        let cls: number | string | null = null;
+        const numMatch = cleanMsg.match(/\b(class|শ্রেণি|ক্লাস|कक्षा)?\s*([1-9]|1[0-2])(?:th|st|nd|rd)?\b/i);
+        if (numMatch && numMatch[2]) cls = parseInt(numMatch[2], 10);
+        else if (/দশম|ten|10/i.test(cleanMsg)) cls = 10;
+        else if (/একাদশ|eleven|11/i.test(cleanMsg)) cls = 11;
+        else if (/দ্বাদশ|twelve|12/i.test(cleanMsg)) cls = 12;
+        else if (/নবম|nine|9/i.test(cleanMsg)) cls = 9;
+        else if (/অষ্টম|eight|8/i.test(cleanMsg)) cls = 8;
+        else if (/সপ্তম|seven|7/i.test(cleanMsg)) cls = 7;
+
+        newlyExtracted.education = {
+          level: "school",
+          class: cls, // Null if not stated! NEVER default
+          board: null,
+        };
+      } else if (isCollege) {
+        let crs: string | null = null;
+        if (/b\.?sc|bsc|বিএসসি/i.test(cleanMsg)) crs = "B.Sc.";
+        else if (/b\.?a\b|ba\b|বিএ\b/i.test(cleanMsg)) crs = "B.A.";
+        else if (/b\.?tech|btech|engineering|ইঞ্জিনিয়ারিং/i.test(cleanMsg)) crs = "B.Tech";
+        else if (/b\.?com|bcom|বিকম/i.test(cleanMsg)) crs = "B.Com";
+        else if (/diploma|iti|polytechnic|ডিপ্লোমা|আইটিআই/i.test(cleanMsg)) crs = "Diploma / ITI";
+        else if (/m\.?sc|msc|এমএসসি/i.test(cleanMsg)) crs = "M.Sc.";
+        else if (/m\.?a\b|ma\b|এমএ/i.test(cleanMsg)) crs = "M.A.";
+        else if (/mbbs|medical|মেডিকেল/i.test(cleanMsg)) crs = "MBBS";
+
+        let yr: number | string | null = null;
+        if (/1st|first|প্রথম|১ম|पहला|1st year|১ম বর্ষ/i.test(cleanMsg)) yr = 1;
+        else if (/2nd|second|দ্বিতীয়|২য়|दूसरा|2nd year|২য় বর্ষ/i.test(cleanMsg)) yr = 2;
+        else if (/3rd|third|তৃতীয়|৩য়|तीसरा|3rd year|৩য় বর্ষ/i.test(cleanMsg)) yr = 3;
+        else if (/4th|fourth|final|চতুর্থ|৪র্থ|चौथा|4th year|৪র্থ বর্ষ/i.test(cleanMsg)) yr = 4;
+
+        newlyExtracted.education = {
+          level: "college",
+          course: crs, // Null if not stated! NEVER default
+          year: yr, // Null if not stated! NEVER default
+          semester: null,
+          institution: null,
+        };
       }
-    } else if (pendingKey === "age") {
-      const num = cleanMsg.match(/\b\d{1,2}\b/);
-      if (num) {
-        newlyExtracted.age = num[0];
+    }
+
+    // Income
+    if (/income|আয়|आय|salary|টাকা|rupees|লাখ|lakh|bpl|দারিদ্র্যসীমা|বিপিএল/i.test(cleanMsg) || pendingKey === "income") {
+      if (/bpl|দারিদ্র্যসীমা|বিপিএল|गरीबी रेखा/i.test(cleanMsg)) {
+        newlyExtracted.income = "BPL (Below Poverty Line)";
       } else {
-        if (/কুড়ি|বিস|twenty|20/i.test(cleanMsg)) newlyExtracted.age = "20";
-        else if (/পঁচিশ|पच्चीस|twenty five|25/i.test(cleanMsg)) newlyExtracted.age = "25";
-        else if (/তিরিশ|तीस|thirty|30/i.test(cleanMsg)) newlyExtracted.age = "30";
-        else if (/চল্লিশ|चालीस|forty|40/i.test(cleanMsg)) newlyExtracted.age = "40";
-        else if (/পঁয়তাল্লিশ|पैंतालीस|forty five|45/i.test(cleanMsg)) newlyExtracted.age = "45";
-        else if (/ষাট|साठ|sixty|60/i.test(cleanMsg)) newlyExtracted.age = "60";
-        else if (cleanMsg) newlyExtracted.age = cleanMsg;
-      }
-    } else if (pendingKey === "occupation") {
-      if (/student|study|college|school|porashona|ছাত্র|ছাত্রী|छात्र|पढाई/i.test(cleanMsg)) {
-        newlyExtracted.occupation = "Student";
-
-        // Check if user already specified school or college in the same breath
-        if (/স্কুল|school|स्कूल/i.test(cleanMsg) && !/college|university|কলেজ|विश्वविद्यालय|कॉलेज/i.test(cleanMsg)) {
-          const cls = extractClass(cleanMsg);
-          newlyExtracted.education = {
-            level: "school",
-            class: cls || null,
-            board: null,
-          };
-        } else if (/college|university|varsity|কলেজ|विश्वविद्यालय|कॉलेज|b\.?sc|b\.?a|b\.?tech/i.test(cleanMsg)) {
-          const crs = /b\.?sc|b\.?a|b\.?tech|b\.?com|diploma|iti|m\.?a|m\.?sc/i.test(cleanMsg) ? extractCourse(cleanMsg) : null;
-          newlyExtracted.education = {
-            level: "college",
-            course: crs || null,
-            year: null,
-            semester: null,
-            institution: null,
-          };
+        const lakhMatch = cleanMsg.match(/(\d+(?:\.\d+)?)\s*(?:lakh|লাখ|लाख)/i);
+        if (lakhMatch && lakhMatch[1]) {
+          newlyExtracted.income = `₹${lakhMatch[1]} Lakh`;
+        } else if (cleanMsg.length > 0 && pendingKey === "income") {
+          newlyExtracted.income = cleanMsg;
         }
-      } else if (/farmer|krishi|chash|kisan|কৃষক|কৃষি|किसान|खेती/i.test(cleanMsg)) {
-        newlyExtracted.occupation = "Farmer";
-      } else if (/business|shop|dokandar|byabsa|ব্যবসা|व्यापार|दुकान/i.test(cleanMsg)) {
-        newlyExtracted.occupation = "Self-Employed / Business";
-      } else if (/artisan|craftsman|karigar|tailor|carpenter|কারিগর|कारीगर/i.test(cleanMsg)) {
-        newlyExtracted.occupation = "Artisan / Craftsman";
-      } else if (cleanMsg) {
-        newlyExtracted.occupation = cleanMsg;
       }
-    } else if (pendingKey === "education_level") {
-      const isCollege = /college|university|varsity|কলেজ|বিশ্ববিদ্যালয়|कॉलेज|यूनिवर्सिटी|b\.?a|b\.?sc|b\.?tech|b\.?com|diploma|iti|m\.?a|m\.?sc|degree/i.test(cleanMsg);
-      const isSchool = /school|স্কুল|স্কুলে|স্কুলে পড়ি|स्कूल|class|শ্রেণি|দশম|একাদশ|দ্বাদশ/i.test(cleanMsg) && !isCollege;
+    }
 
-      if (isCollege) {
-        const crs = /b\.?sc|b\.?a|b\.?tech|b\.?com|diploma|iti|m\.?a|m\.?sc|mbbs|degree|কোর্স|বিএসসি|বিএ/i.test(cleanMsg) ? extractCourse(cleanMsg) : null;
-        newlyExtracted.education = {
-          level: "college",
-          course: crs,
-          year: null,
-          semester: null,
-          institution: null,
-        };
-      } else {
-        // Defaults to School
-        const cls = extractClass(cleanMsg);
-        newlyExtracted.education = {
-          level: "school",
-          class: cls || null,
-          board: null,
-        };
-      }
-    } else if (pendingKey === "school_class") {
-      // Check if user changed their mind / corrected to college
-      if (/college|university|varsity|কলেজ|বিশ্ববিদ্যালয়|कॉलेज|यूनिवर्सिटी|actually.*college|না.*কলেজ/i.test(cleanMsg)) {
-        newlyExtracted.education = {
-          level: "college",
-          course: null,
-          year: null,
-          semester: null,
-          institution: null,
-        };
-      } else {
-        const cls = extractClass(cleanMsg);
-        newlyExtracted.education = {
-          level: "school",
-          class: cls || cleanMsg,
-          board: null,
-        };
-      }
-    } else if (pendingKey === "college_course") {
-      // Check if user changed their mind / corrected to school
-      if (/school|স্কুল|স্কুলে|স্কুলে পড়ি|स्कूल|actually.*school|না.*স্কুল/i.test(cleanMsg)) {
-        newlyExtracted.education = {
-          level: "school",
-          class: null,
-          board: null,
-        };
-      } else {
-        const crs = extractCourse(cleanMsg);
-        newlyExtracted.education = {
-          ...(profile.education || {}),
-          level: "college",
-          course: crs,
-        };
-      }
-    } else if (pendingKey === "college_year") {
-      // Check if user corrected to school
-      if (/school|স্কুল|স্কুলে|স্কুলে পড়ি|स्कूल/i.test(cleanMsg)) {
-        newlyExtracted.education = {
-          level: "school",
-          class: null,
-          board: null,
-        };
-      } else {
-        const yr = extractYear(cleanMsg);
-        newlyExtracted.education = {
-          ...(profile.education || {}),
-          level: "college",
-          year: yr,
-        };
-      }
-    } else if (pendingKey === "income") {
-      if (cleanMsg) newlyExtracted.income = cleanMsg;
-    } else if (pendingKey === "ownsLand") {
-      const lower = cleanMsg.toLowerCase();
-      if (lower.includes("yes") || lower.includes("হ্যাঁ") || lower.includes("हाँ") || lower.includes("ache") || lower.includes("আছে")) {
+    // Land Ownership
+    if (pendingKey === "ownsLand" || /land|জমি|जमीन|chash|চাষ/i.test(cleanMsg)) {
+      if (/yes|হ্যাঁ|हाँ|ache|আছে|own land|own|জমি আছে|जमीन है/i.test(cleanMsg)) {
         newlyExtracted.ownsLand = true;
-      } else {
+        const acreMatch = cleanMsg.match(/(\d+(?:\.\d+)?)\s*(?:acre|acres|একর|বিঘা)/i);
+        if (acreMatch && acreMatch[1]) newlyExtracted.landSizeAcres = acreMatch[1];
+      } else if (/no|না|নেই|नहीं|जमीन नहीं|ভাগচাষী|landless/i.test(cleanMsg)) {
         newlyExtracted.ownsLand = false;
       }
     }
 
-    const merged = { ...(profile || {}), ...newlyExtracted };
+    const merged = { ...currentProfile, ...newlyExtracted };
     if (newlyExtracted.education) {
-      merged.education = newlyExtracted.education;
+      merged.education = {
+        ...(currentProfile.education || {}),
+        ...newlyExtracted.education,
+      };
     }
 
-    const isStudent =
-      (merged.occupation || "").toLowerCase().includes("student") ||
-      (merged.occupation || "").toLowerCase().includes("study") ||
-      (merged.occupation || "").toLowerCase().includes("college") ||
-      (merged.occupation || "").toLowerCase().includes("school") ||
-      (merged.occupation || "").toLowerCase().includes("ছাত্র");
-
-    // Strict sequential state evaluation
-    let nextKey = "name";
-    let isReady = false;
-
-    if (!merged.name || String(merged.name).trim().length === 0) {
-      nextKey = "name";
-    } else if (!merged.age || String(merged.age).trim().length === 0) {
-      nextKey = "age";
-    } else if (!merged.occupation || String(merged.occupation).trim().length === 0) {
-      nextKey = "occupation";
-    } else if (isStudent && !merged.education?.level) {
-      nextKey = "education_level";
-    } else if (isStudent && merged.education?.level === "school" && (!merged.education.class || String(merged.education.class).trim().length === 0)) {
-      nextKey = "school_class";
-    } else if (isStudent && merged.education?.level === "college" && (!merged.education.course || String(merged.education.course).trim().length === 0)) {
-      nextKey = "college_course";
-    } else if (isStudent && merged.education?.level === "college" && merged.education.course && !merged.education.year && !merged.education.semester) {
-      nextKey = "college_year";
-    } else if (!merged.income || String(merged.income).trim().length === 0) {
-      nextKey = "income";
-    } else if (merged.occupation === "Farmer" && merged.ownsLand === undefined) {
-      nextKey = "ownsLand";
-    } else {
-      isReady = true;
-      nextKey = "completed";
-    }
-
+    const isReady = isProfileFullyReady(merged);
+    const nextKey = determineNextMissingField(merged);
     const userName = merged.name || "";
 
     const questionMap: Record<string, any> = {
@@ -943,14 +1479,38 @@ Respond ONLY with a valid JSON object matching this schema:
 
     return {
       extractedFields: newlyExtracted,
-      acknowledgment: {
-        en: userName ? `Thanks, ${userName}.` : "Understood.",
-        bn: userName ? `ধন্যবাদ, ${userName}।` : "বুঝতে পেরেছি।",
-        hi: userName ? `धन्यवाद, ${userName}।` : "समझ गया।",
-      },
+      mergedProfile: merged,
       nextQuestion: questionMap[nextKey] || questionMap.completed,
       isReadyForResults: isReady,
+      debug: {
+        userMessage: cleanMsg,
+        assistantReply: questionMap[nextKey]?.textBn || questionMap.completed.textBn,
+        extractedFacts: newlyExtracted,
+        currentProfile: merged,
+        autoGeneratedUserInput: false,
+        demoInput: false,
+        language: lang,
+      },
     };
+  }
+
+  function classifyCitizenTextLocally(text: string) {
+    const lower = text.toLowerCase();
+    let category = "healthcare";
+    if (lower.includes("রাস্তা") || lower.includes("সেতু") || lower.includes("road") || lower.includes("bridge") || lower.includes("सड़क")) {
+      category = "roads";
+    } else if (lower.includes("জল") || lower.includes("পানি") || lower.includes("water") || lower.includes("drinking")) {
+      category = "drinking_water";
+    } else if (lower.includes("স্কুল") || lower.includes("school") || lower.includes("education")) {
+      category = "schools_education";
+    } else if (lower.includes("বিদ্যুৎ") || lower.includes("electricity") || lower.includes("কারেন্ট")) {
+      category = "electricity";
+    } else if (lower.includes("সেচ") || lower.includes("খাল") || lower.includes("irrigation")) {
+      category = "irrigation";
+    } else if (lower.includes("ড্রেন") || lower.includes("নিকাশি") || lower.includes("drain") || lower.includes("flood")) {
+      category = "drainage_flood";
+    }
+    return { category, problem: text };
   }
 
   // Vite middleware for dev or static serving for prod

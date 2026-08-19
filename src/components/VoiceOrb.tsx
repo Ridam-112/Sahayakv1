@@ -1,14 +1,29 @@
 import React from "react";
 import { Mic, MicOff, Volume2, Loader2, Square } from "lucide-react";
 
-export type VoiceOrbState = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "stopped";
+export type TurnState =
+  | "IDLE"
+  | "ASSISTANT_SPEAKING"
+  | "WAITING_FOR_USER"
+  | "USER_SPEAKING"
+  | "PROCESSING_USER";
+
+export type VoiceOrbState =
+  | "idle"
+  | "connecting"
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "stopped"
+  | TurnState;
 
 interface VoiceOrbProps {
   isListening?: boolean;
   isSpeaking?: boolean;
-  state?: VoiceOrbState;
-  onClick: () => void;
-  size?: "sm" | "md" | "lg";
+  state?: VoiceOrbState | TurnState;
+  onClick?: () => void;
+  size?: "sm" | "md" | "lg" | number;
+  volumeLevel?: number;
 }
 
 export const VoiceOrb: React.FC<VoiceOrbProps> = ({
@@ -17,10 +32,22 @@ export const VoiceOrb: React.FC<VoiceOrbProps> = ({
   state,
   onClick,
   size = "lg",
+  volumeLevel = 0,
 }) => {
-  // Infer active state if not explicitly passed
-  const activeState: VoiceOrbState =
-    state || (isSpeaking ? "speaking" : isListening ? "listening" : "idle");
+  // Normalize TurnState into standard visual state
+  const normalizeState = (rawState?: VoiceOrbState | TurnState): "idle" | "listening" | "thinking" | "speaking" | "stopped" => {
+    if (rawState === "IDLE") return "idle";
+    if (rawState === "ASSISTANT_SPEAKING") return "speaking";
+    if (rawState === "WAITING_FOR_USER" || rawState === "USER_SPEAKING") return "listening";
+    if (rawState === "PROCESSING_USER") return "thinking";
+    if (rawState === "connecting") return "thinking";
+    if (rawState === "listening" || rawState === "speaking" || rawState === "thinking" || rawState === "stopped" || rawState === "idle") {
+      return rawState;
+    }
+    return isSpeaking ? "speaking" : isListening ? "listening" : "idle";
+  };
+
+  const activeState = normalizeState(state);
 
   const sizeClasses = {
     sm: "w-16 h-16",
@@ -98,31 +125,49 @@ export const VoiceOrb: React.FC<VoiceOrbProps> = ({
         {/* Live Audio Waveform Dots inside orb */}
         <div className="flex items-center gap-1 mt-1.5">
           <span
-            className={`w-1 rounded-full bg-white transition-all ${
+            className={`w-1 rounded-full bg-white transition-all duration-75 ${
               activeState === "listening"
-                ? "h-3 animate-pulse"
+                ? "animate-pulse"
                 : activeState === "speaking"
                 ? "h-2.5 animate-bounce"
                 : "h-1 opacity-70"
             }`}
+            style={{
+              height:
+                activeState === "listening"
+                  ? `${Math.max(4, Math.min(18, 4 + volumeLevel * 20))}px`
+                  : undefined,
+            }}
           />
           <span
-            className={`w-1 rounded-full bg-white transition-all ${
+            className={`w-1 rounded-full bg-white transition-all duration-75 ${
               activeState === "listening"
-                ? "h-4.5 animate-pulse delay-75"
+                ? "animate-pulse"
                 : activeState === "speaking"
                 ? "h-4 animate-bounce delay-100"
                 : "h-1 opacity-70"
             }`}
+            style={{
+              height:
+                activeState === "listening"
+                  ? `${Math.max(6, Math.min(24, 6 + volumeLevel * 30))}px`
+                  : undefined,
+            }}
           />
           <span
-            className={`w-1 rounded-full bg-white transition-all ${
+            className={`w-1 rounded-full bg-white transition-all duration-75 ${
               activeState === "listening"
-                ? "h-3 animate-pulse delay-150"
+                ? "animate-pulse"
                 : activeState === "speaking"
                 ? "h-2.5 animate-bounce delay-200"
                 : "h-1 opacity-70"
             }`}
+            style={{
+              height:
+                activeState === "listening"
+                  ? `${Math.max(4, Math.min(18, 4 + volumeLevel * 20))}px`
+                  : undefined,
+            }}
           />
         </div>
       </button>

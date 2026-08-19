@@ -28,6 +28,11 @@ export interface StateOption {
 export type ScreenView =
   | "language_select"
   | "state_select"
+  | "home"
+  | "development_voice"
+  | "voice_report"
+  | "text_report"
+  | "policymaker_dashboard"
   | "civic_feed"
   | "mode_choice"
   | "profile_form"
@@ -41,7 +46,130 @@ export type ScreenView =
 
 export type ScreenState = ScreenView;
 
-export type NavTab = "home" | "schemes" | "my_vault" | "help";
+export type NavTab = "home" | "voice_report" | "intelligence" | "schemes" | "civic_feed" | "my_vault" | "help";
+
+export type DevelopmentCategory =
+  | "healthcare"
+  | "roads"
+  | "public_transport"
+  | "drinking_water"
+  | "sanitation"
+  | "electricity"
+  | "internet_connectivity"
+  | "schools_education"
+  | "public_safety"
+  | "waste_management"
+  | "drainage_flood"
+  | "housing"
+  | "agriculture_infrastructure"
+  | "irrigation"
+  | "employment_infrastructure"
+  | "government_services"
+  | "other";
+
+export interface CategoryMetadata {
+  id: DevelopmentCategory;
+  name: string;
+  nameBn: string;
+  nameHi: string;
+  icon: string;
+  color: string;
+  description: string;
+}
+
+export interface RequestLocation {
+  country: string;
+  state: string;
+  district: string;
+  city?: string;
+  locality?: string;
+  coordinates?: [number, number]; // [lat, lng]
+}
+
+export interface CitizenDevelopmentRequest {
+  requestId: string;
+  language: LanguageCode | string;
+  originalText: string;
+  category: DevelopmentCategory;
+  subCategory?: string;
+  location: RequestLocation;
+  problem: string;
+  urgency: "low" | "medium" | "high" | "critical";
+  affectedPopulation: "individual" | "neighborhood" | "community" | "entire_region";
+  citizenSuggestedSolution?: string | null;
+  timestamp: string;
+  source: "voice" | "text" | "messaging" | "panchayat_sync";
+  verifiedStatus?: "verified" | "triaged" | "pending";
+  citizenName?: string;
+  priorityScoreEstimate?: number;
+}
+
+export interface InfrastructureIndicator {
+  name: string;
+  currentValue: string | number;
+  benchmarkValue: string | number;
+  unit?: string;
+  gapDescription: string;
+  status: "critical" | "warning" | "adequate";
+}
+
+export interface DemographicProfile {
+  population: number;
+  densityPerKm2: number;
+  vulnerableHouseholdsPct: number;
+  ruralPct: number;
+  bplCardHoldersPct?: number;
+}
+
+export interface DemandHotspot {
+  id: string;
+  category: DevelopmentCategory;
+  title: string;
+  titleBn?: string;
+  titleHi?: string;
+  location: {
+    country: string;
+    state: string;
+    district: string;
+    city: string;
+    coordinates: [number, number]; // [lat, lng]
+  };
+  requestCount: number;
+  uniqueCitizens: number;
+  severity: "high" | "medium" | "low";
+  estimatedAffectedPopulation: number;
+  infrastructureIndicator: InfrastructureIndicator;
+  demographics: DemographicProfile;
+  priorityScore: number; // 0-100 (AI-assisted priority estimate)
+  priorityRank: number;
+  sampleCitizenQuotes: {
+    text: string;
+    lang: string;
+    timestamp: string;
+    locationText: string;
+    audioAvailable?: boolean;
+  }[];
+  aiRecommendation: {
+    title: string;
+    summary: string;
+    suggestedAction: string;
+    estimatedBudget?: string;
+    targetTimeline?: string;
+    whyJustification: string[];
+    sdgAlignment?: string[];
+  };
+  trend7Days: number; // percentage change
+  status: "emerging" | "escalated" | "under_review" | "sanctioned";
+}
+
+export interface BRICSRegionOption {
+  code: "IN" | "BR" | "RU" | "CN" | "ZA";
+  name: string;
+  flag: string;
+  currency: string;
+  pilotDistrict: string;
+  activeDemonstration: boolean;
+}
 
 export interface ConversationMessage {
   id: string;

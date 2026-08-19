@@ -6,14 +6,22 @@ import {
   CitizenProfile,
   Scheme,
   ActiveVaultApplication,
+  CitizenDevelopmentRequest,
 } from "./types";
 import {
   INITIAL_CITIZEN_PROFILE,
   INITIAL_SCHEMES,
   evaluateSchemesForProfile,
 } from "./data/mockData";
+import {
+  INITIAL_CITIZEN_REQUESTS,
+} from "./data/developmentData";
 import { LanguageSelect } from "./components/LanguageSelect";
 import { StateSelect } from "./components/StateSelect";
+import { HomeScreen } from "./components/HomeScreen";
+import { DevelopmentVoiceAgent } from "./components/DevelopmentVoiceAgent";
+import { PolicymakerDashboard } from "./components/PolicymakerDashboard";
+import { WriteRequestModal } from "./components/WriteRequestModal";
 import { CivicFeed } from "./components/CivicFeed";
 import { ModeChoice } from "./components/ModeChoice";
 import { ProfileForm } from "./components/ProfileForm";
@@ -37,6 +45,16 @@ export default function App() {
   const [schemes, setSchemes] = useState<Scheme[]>(INITIAL_SCHEMES);
   const [selectedScheme, setSelectedScheme] = useState<Scheme>(INITIAL_SCHEMES[0]);
 
+  // Track 1 Citizen Requests State
+  const [citizenRequests, setCitizenRequests] = useState<CitizenDevelopmentRequest[]>(
+    INITIAL_CITIZEN_REQUESTS
+  );
+
+  // Modals state
+  const [showWriteModal, setShowWriteModal] = useState(false);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [showAssistantModal, setShowAssistantModal] = useState(false);
+
   // Wishlist and Active Applications in Vault
   const [wishlistIds, setWishlistIds] = useState<string[]>(["pm-kisan"]);
   const [activeApplications, setActiveApplications] = useState<ActiveVaultApplication[]>([
@@ -51,10 +69,6 @@ export default function App() {
       deadline: "July 31, 2026",
     },
   ]);
-
-  // Modals state
-  const [showSummaryModal, setShowSummaryModal] = useState(false);
-  const [showAssistantModal, setShowAssistantModal] = useState(false);
 
   // Load saved state if available
   useEffect(() => {
@@ -84,8 +98,23 @@ export default function App() {
       if (savedApps) {
         setActiveApplications(JSON.parse(savedApps));
       }
+      const savedRequests = localStorage.getItem("sahayak_citizen_requests");
+      if (savedRequests) {
+        setCitizenRequests(JSON.parse(savedRequests));
+      }
     } catch {}
   }, []);
+
+  // Save new citizen development request
+  const handleSaveDevelopmentRequest = (newReq: CitizenDevelopmentRequest) => {
+    setCitizenRequests((prev) => {
+      const next = [newReq, ...prev];
+      try {
+        localStorage.setItem("sahayak_citizen_requests", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
 
   // Save profile changes & re-evaluate schemes
   const handleUpdateProfile = (updated: Partial<CitizenProfile>) => {
@@ -173,17 +202,26 @@ export default function App() {
       setCurrentScreen(prev);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } else {
-      setCurrentScreen("language_select");
+      setCurrentScreen("home");
     }
   };
 
   const handleNavTabSelect = (tab: NavTab) => {
     switch (tab) {
       case "home":
-        navigateTo("civic_feed");
+        navigateTo("home");
+        break;
+      case "voice_report":
+        navigateTo("development_voice");
+        break;
+      case "intelligence":
+        navigateTo("policymaker_dashboard");
         break;
       case "schemes":
         navigateTo("find_schemes_voice");
+        break;
+      case "civic_feed":
+        navigateTo("civic_feed");
         break;
       case "my_vault":
         navigateTo("my_vault");
@@ -212,13 +250,52 @@ export default function App() {
             selectedState={citizenProfile.state}
             onSelectState={(stateName) => {
               handleUpdateProfile({ state: stateName });
-              navigateTo("civic_feed");
+              navigateTo("home");
             }}
           />
         )}
 
-        {/* Screen 3: Civic Feed & Home Discovery */}
-        {(currentScreen === "civic_feed" || currentScreen === "mode_choice") && (
+        {/* Screen 3: Primary Track 1 Home Experience */}
+        {currentScreen === "home" && (
+          <HomeScreen
+            currentLanguage={currentLanguage}
+            onSelectLanguage={handleSelectLanguage}
+            onStartVoiceReport={() => navigateTo("development_voice")}
+            onStartTextReport={() => setShowWriteModal(true)}
+            onOpenDashboard={() => navigateTo("policymaker_dashboard")}
+            onOpenSchemes={() => navigateTo("find_schemes_voice")}
+            onOpenFeed={() => navigateTo("civic_feed")}
+            onOpenHelp={() => navigateTo("help_grievance")}
+            onSelectNavTab={handleNavTabSelect}
+            totalRequestsCount={12480 + citizenRequests.length - 6}
+          />
+        )}
+
+        {/* Screen 4: Dynamic Development Need Voice Agent */}
+        {currentScreen === "development_voice" && (
+          <DevelopmentVoiceAgent
+            currentLanguage={currentLanguage}
+            onSelectLanguage={handleSelectLanguage}
+            onSaveRequest={handleSaveDevelopmentRequest}
+            onViewDashboard={() => navigateTo("policymaker_dashboard")}
+            onSelectNavTab={handleNavTabSelect}
+            onBack={() => navigateTo("home")}
+          />
+        )}
+
+        {/* Screen 5: Flagship Policymaker Dashboard (Development Intelligence) */}
+        {currentScreen === "policymaker_dashboard" && (
+          <PolicymakerDashboard
+            currentLanguage={currentLanguage}
+            onSelectLanguage={handleSelectLanguage}
+            onSelectNavTab={handleNavTabSelect}
+            onBack={() => navigateTo("home")}
+            citizenRequests={citizenRequests}
+          />
+        )}
+
+        {/* Screen 6: Civic Feed & Announcements */}
+        {currentScreen === "civic_feed" && (
           <CivicFeed
             currentLanguage={currentLanguage}
             onSelectLanguage={handleSelectLanguage}
@@ -238,7 +315,7 @@ export default function App() {
           />
         )}
 
-        {/* Screen 4: Voice Agent - Conversational Scheme Finder */}
+        {/* Screen 7: Voice Agent - Conversational Scheme Finder */}
         {currentScreen === "find_schemes_voice" && (
           <SchemeVoiceAgent
             profile={citizenProfile}
@@ -247,11 +324,11 @@ export default function App() {
             currentLanguage={currentLanguage}
             onSelectLanguage={handleSelectLanguage}
             onSelectNavTab={handleNavTabSelect}
-            onBack={handleBack}
+            onBack={() => navigateTo("home")}
           />
         )}
 
-        {/* Screen 5: Profile Form (Type Mode) */}
+        {/* Screen 8: Profile Form (Type Mode) */}
         {currentScreen === "profile_form" && (
           <ProfileForm
             profile={citizenProfile}
@@ -264,7 +341,7 @@ export default function App() {
           />
         )}
 
-        {/* Screen 6: Legacy Voice Wizard */}
+        {/* Screen 9: Legacy Voice Wizard */}
         {currentScreen === "voice_wizard" && (
           <VoiceWizard
             profile={citizenProfile}
@@ -277,7 +354,7 @@ export default function App() {
           />
         )}
 
-        {/* Screen 7: Schemes Results (Personalized AI Matches) */}
+        {/* Screen 10: Schemes Results (Personalized AI Matches) */}
         {currentScreen === "schemes_list" && (
           <SchemesResults
             schemes={schemes}
@@ -301,7 +378,7 @@ export default function App() {
           />
         )}
 
-        {/* Screen 8: Scheme Detail */}
+        {/* Screen 11: Scheme Detail */}
         {currentScreen === "scheme_detail" && (
           <SchemeDetail
             scheme={selectedScheme}
@@ -314,7 +391,7 @@ export default function App() {
           />
         )}
 
-        {/* Screen 9: Scheme Apply (Guided Application Assistant) */}
+        {/* Screen 12: Scheme Apply (Guided Application Assistant) */}
         {currentScreen === "scheme_apply" && (
           <SchemeApply
             scheme={selectedScheme}
@@ -327,7 +404,7 @@ export default function App() {
           />
         )}
 
-        {/* Screen 10: Help & Grievance Redressal */}
+        {/* Screen 13: Help & Grievance Redressal */}
         {currentScreen === "help_grievance" && (
           <HelpGrievance
             profile={citizenProfile}
@@ -338,7 +415,7 @@ export default function App() {
           />
         )}
 
-        {/* Screen 11: Vault Tab: Active Applications & Document Locker */}
+        {/* Screen 14: Vault Tab: Active Applications & Document Locker */}
         {currentScreen === "my_vault" && (
           <MyVault
             profile={citizenProfile}
@@ -357,6 +434,19 @@ export default function App() {
           />
         )}
       </div>
+
+      {/* Write / Text Development Request Modal */}
+      {showWriteModal && (
+        <WriteRequestModal
+          isOpen={showWriteModal}
+          onClose={() => setShowWriteModal(false)}
+          onSubmit={(req) => {
+            handleSaveDevelopmentRequest(req);
+            navigateTo("policymaker_dashboard");
+          }}
+          currentLanguage={currentLanguage}
+        />
+      )}
 
       {/* Application Summary Modal */}
       {showSummaryModal && (
@@ -378,4 +468,3 @@ export default function App() {
     </div>
   );
 }
-

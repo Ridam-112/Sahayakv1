@@ -1,6 +1,6 @@
 {
   "name": "Sahayak",
-  "description": "Official Digital Public Infrastructure (DPI) platform for citizen scheme discovery, voice-assisted eligibility, guided application filing, document vault, and grievance redressal.",
+  "description": "Multilingual AI Digital Public Infrastructure (DPI) platform aggregating citizen development feedback, demand hotspots, and explainable infrastructure priorities for policymakers across BRICS nations.",
   "requestFramePermissions": [
     "microphone"
   ],

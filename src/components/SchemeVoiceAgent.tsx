@@ -18,18 +18,30 @@ import {
   Check,
   UserCheck,
   Zap,
+  Loader2,
 } from "lucide-react";
 import { CitizenProfile, LanguageCode, NavTab, ConversationMessage } from "../types";
 import { Header } from "./Header";
 import { BottomNav } from "./BottomNav";
 import { VoiceOrb, VoiceOrbState } from "./VoiceOrb";
+import { MicrophoneStateIndicator } from "./MicrophoneStateIndicator";
+import { ConversationDebugDrawer, ConversationDebugInfo } from "./ConversationDebugDrawer";
 import {
   speakText,
   stopSpeaking,
+  playDirectBase64Audio,
   createSpeechRecognizer,
   preloadTTSAudio,
   VoiceLatencyMetrics,
 } from "../utils/speech";
+import { GeminiAudioRecorder } from "../utils/audioRecorder";
+
+export type TurnState =
+  | "IDLE"
+  | "ASSISTANT_SPEAKING"
+  | "WAITING_FOR_USER"
+  | "USER_SPEAKING"
+  | "PROCESSING_USER";
 
 interface SchemeVoiceAgentProps {
   profile: CitizenProfile;
@@ -50,7 +62,8 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
   onSelectNavTab,
   onBack,
 }) => {
-  // Voice Agent State Machine: "idle" | "connecting" | "listening" | "thinking" | "speaking" | "stopped"
+  // Turn State Machine: strict turn-taking
+  const [turnState, setTurnState] = useState<TurnState>("IDLE");
   const [agentState, setAgentState] = useState<VoiceOrbState>("idle");
   const [hasStartedConversation, setHasStartedConversation] = useState<boolean>(false);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
@@ -60,20 +73,40 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
   const [currentSuggestedOptions, setCurrentSuggestedOptions] = useState<string[]>([]);
   const [progressCount, setProgressCount] = useState(1);
   const [micError, setMicError] = useState<string | null>(null);
+  const [micVolumeLevel, setMicVolumeLevel] = useState<number>(0);
+  const [liveInterimTranscript, setLiveInterimTranscript] = useState<string>("");
   const [latencyMetrics, setLatencyMetrics] = useState<VoiceLatencyMetrics | null>(null);
+  const [debugInfo, setDebugInfo] = useState<ConversationDebugInfo | null>(null);
+  const [isDebugOpen, setIsDebugOpen] = useState(false);
 
+  const audioRecorderRef = useRef<GeminiAudioRecorder | null>(null);
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isInterruptedRef = useRef(false);
   const textInputRef = useRef<HTMLInputElement>(null);
 
-  // Preload Bengali greeting audio into memory as soon as component loads or language switches
-  useEffect(() => {
-    if (currentLanguage === "bn") {
-      const bnGreeting =
-        "নমস্কার, আমি সহায়ক। আপনার প্রয়োজন এবং যোগ্যতার ভিত্তিতে উপযুক্ত সরকারি প্রকল্প খুঁজে দিতে পারি। তার জন্য আপনাকে কয়েকটি প্রশ্ন করব। প্রথমে আপনার নামটা বলুন।";
-      preloadTTSAudio(bnGreeting, "bn");
+  const stopAllAudioCapture = () => {
+    setMicVolumeLevel(0);
+    setLiveInterimTranscript("");
+    if (audioRecorderRef.current) {
+      audioRecorderRef.current.cancel();
     }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+  };
+
+  // Initial debug log on mount: ensure strictly IDLE and mic OFF
+  useEffect(() => {
+    console.log("VOICE STATE: IDLE | microphone = OFF");
+  }, []);
+
+  // Preload greeting audio into memory as soon as component loads or language switches
+  useEffect(() => {
+    const greetingData = getGreetingData(currentLanguage);
+    preloadTTSAudio(greetingData.spoken, currentLanguage, "Kore");
   }, [currentLanguage]);
 
   // Central localized greetings (Natural female conversational persona)
@@ -127,8 +160,21 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     onDone?: () => void,
     metrics?: VoiceLatencyMetrics
   ) => {
+    // 1. Enter ASSISTANT_SPEAKING state and ensure microphone is OFF
+    setTurnState("ASSISTANT_SPEAKING");
+    console.log("[TURN DEBUG] state = ASSISTANT_SPEAKING | microphone = OFF");
+
+    // Stop any active speech recognition while assistant speaks
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+
     if (isAudioMuted) {
       setAgentState("listening");
+      setTurnState("WAITING_FOR_USER");
+      console.log("[TURN DEBUG] state = WAITING_FOR_USER (muted) | microphone = ON");
       startVoiceListening();
       onDone?.();
       return;
@@ -144,8 +190,10 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       () => {
         // If user interrupted during speech, don't automatically override the new state
         if (!isInterruptedRef.current) {
+          // 2. Only after audio finishes, transition to WAITING_FOR_USER and turn ON microphone
+          setTurnState("WAITING_FOR_USER");
+          console.log("[TURN DEBUG] state = WAITING_FOR_USER | microphone = ON");
           setAgentState("listening");
-          // Start listening after agent finishes speaking - waiting for real user input
           startVoiceListening();
         }
         onDone?.();
@@ -164,32 +212,26 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, agentState]);
+  }, [messages, turnState, agentState]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopSpeaking();
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch {}
-      }
+      stopAllAudioCapture();
     };
   }, []);
 
   // When language is switched from header during active session
   const handleLanguageChange = (newLang: LanguageCode) => {
     stopSpeaking();
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {}
-    }
+    stopAllAudioCapture();
     onSelectLanguage(newLang);
 
     // If conversation was active, reset so user starts fresh in new language
     if (hasStartedConversation) {
+      setTurnState("IDLE");
+      console.log("[TURN DEBUG] state = IDLE (language changed) | microphone = OFF");
       setAgentState("idle");
       setHasStartedConversation(false);
       setMessages([]);
@@ -197,56 +239,89 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     }
   };
 
-  // Start Voice Listening (Web Speech Recognition)
-  const startVoiceListening = () => {
+  // Start Voice Listening (Gemini Direct Audio with parallel Web Speech for real-time live captions)
+  const startVoiceListening = async () => {
     setMicError(null);
+    setLiveInterimTranscript("");
+    stopAllAudioCapture();
 
-    const langTag =
-      currentLanguage === "bn"
-        ? "bn-IN"
-        : currentLanguage === "hi"
-        ? "hi-IN"
-        : "en-IN";
+    // 1. Start Gemini Native Audio Recorder (high-precision multimodal audio understanding)
+    try {
+      const recorder = new GeminiAudioRecorder({
+        volumeThreshold: 0.012,
+        silenceThresholdMs: 3000,
+        onVolumeChange: (vol) => {
+          setMicVolumeLevel(vol);
+        },
+        onSpeechStart: () => {
+          setTurnState("USER_SPEAKING");
+          console.log("VOICE STATE: USER_SPEAKING");
+        },
+        onSilenceTimeout: async () => {
+          if (recorder.getIsRecording()) {
+            const hasSpoken = recorder.getHasSpoken() || Boolean(liveInterimTranscript);
+            if (!hasSpoken) {
+              // User has not spoken yet; keep waiting, do not interrupt
+              return;
+            }
+            setTurnState("PROCESSING_USER");
+            console.log("VOICE STATE: PROCESSING_USER");
+            setAgentState("thinking");
+            const result = await recorder.stop();
+            if (result.base64 && (result.hasSpeech || recorder.getHasSpoken())) {
+              handleUserAudioTurn(result.base64, result.mimeType);
+            } else {
+              setTurnState("WAITING_FOR_USER");
+              console.log("VOICE STATE: WAITING_FOR_USER (silence loop)");
+              setAgentState("listening");
+              startVoiceListening();
+            }
+          }
+        },
+      });
 
-    // Stop existing recognizer if any
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {}
+      audioRecorderRef.current = recorder;
+      await recorder.start();
+      setAgentState("listening");
+      console.log("VOICE RECORDER: started successfully | listening for user speech");
+    } catch (recorderErr: any) {
+      console.warn("Gemini Audio Recorder notice:", recorderErr);
+      const errMsg = recorderErr?.message || String(recorderErr);
+      if (errMsg.includes("Permission") || errMsg.includes("denied") || errMsg.includes("NotAllowedError")) {
+        setMicError(
+          currentLanguage === "bn"
+            ? "মাইক্রোফোনের অনুমতি প্রয়োজন। অনুগ্রহ করে ব্রাউজারে অনুমতি দিন অথবা নিচে লিখুন।"
+            : currentLanguage === "hi"
+            ? "माइक्रोफ़ोन की अनुमति आवश्यक है। कृपया अनुमति दें या नीचे लिखें।"
+            : "Microphone permission required. Please allow mic in browser or type below."
+        );
+      }
+    }
+  };
+
+  const handleManualAudioSubmit = async () => {
+    if (liveInterimTranscript && liveInterimTranscript.trim()) {
+      const textToSubmit = liveInterimTranscript.trim();
+      stopAllAudioCapture();
+      setTurnState("PROCESSING_USER");
+      setAgentState("thinking");
+      handleUserReply(textToSubmit);
+      return;
     }
 
-    const recognizer = createSpeechRecognizer(
-      langTag,
-      (finalTranscript) => {
-        // ONLY accept non-empty, finalized transcripts from the user
-        if (finalTranscript && finalTranscript.trim()) {
-          setAgentState("thinking");
-          handleUserReply(finalTranscript.trim());
-        }
-      },
-      (err) => {
-        console.warn("Speech recognition notice:", err);
-        if (err === "not-allowed" || err === "permission-denied") {
-          setMicError("Microphone access isn't available. Please type your answer below.");
-          setAgentState("stopped");
-        } else if (err === "no-speech") {
-          // Timeout or pause in speech - stay ready to listen or wait for user typing
-          setAgentState("listening");
-        }
-      }
-    );
-
-    if (recognizer) {
-      recognitionRef.current = recognizer;
-      try {
-        recognizer.start();
+    if (audioRecorderRef.current?.getIsRecording()) {
+      const hasSpoken = audioRecorderRef.current.getHasSpoken();
+      setTurnState("PROCESSING_USER");
+      setAgentState("thinking");
+      const result = await audioRecorderRef.current.stop();
+      if (result.base64 && (hasSpoken || result.hasSpeech || result.durationMs >= 800)) {
+        handleUserAudioTurn(result.base64, result.mimeType);
+      } else {
+        // No speech detected, resume listening smoothly
+        setTurnState("WAITING_FOR_USER");
         setAgentState("listening");
-      } catch {
-        setAgentState("listening");
+        startVoiceListening();
       }
-    } else {
-      setMicError("Microphone access is unavailable in this browser. Please type your answer below.");
-      setAgentState("stopped");
     }
   };
 
@@ -262,7 +337,9 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
 
     setHasStartedConversation(true);
     setMicError(null);
-    setAgentState("speaking"); // Immediate transition so user never sees a blank/stuck screen
+    setTurnState("ASSISTANT_SPEAKING");
+    console.log("VOICE STATE: ASSISTANT_SPEAKING | microphone = OFF");
+    setAgentState("speaking");
 
     const greetingData = getGreetingData(currentLanguage);
     const initialMsg: ConversationMessage = {
@@ -280,6 +357,8 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     setCurrentSuggestedOptions([]);
     setPendingQuestionKey("name");
 
+    console.log(`GEMINI RESPONSE: "${greetingData.spoken}"`);
+
     // Speak first question in the selected native language immediately (0ms delay)
     speakCurrentAgentMessage(
       greetingData.spoken,
@@ -295,30 +374,57 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
 
   // Toggle or Interruption handler on Voice Orb click
   const handleVoiceOrbClick = () => {
-    if (agentState === "idle" || !hasStartedConversation) {
+    if (turnState === "IDLE" || !hasStartedConversation) {
       handleStartConversation();
       return;
     }
 
-    if (agentState === "speaking") {
+    if (turnState === "ASSISTANT_SPEAKING") {
       // Barge-in / Interruption: immediately stop speech and allow user to speak
       isInterruptedRef.current = true;
       stopSpeaking();
+      setTurnState("WAITING_FOR_USER");
+      console.log("VOICE STATE: WAITING_FOR_USER (barge-in) | microphone = ON");
+      setAgentState("listening");
       startVoiceListening();
       return;
     }
 
-    if (agentState === "listening") {
-      // Pause listening
-      try {
-        recognitionRef.current?.stop();
-      } catch {}
-      setAgentState("stopped");
+    if (turnState === "USER_SPEAKING") {
+      // User tapped orb after actually speaking -> submit voice answer
+      handleManualAudioSubmit();
       return;
     }
 
-    if (agentState === "stopped") {
+    if (turnState === "WAITING_FOR_USER") {
+      // If user typed in the input box, submit the typed text
+      if (typedInput.trim()) {
+        stopSpeaking();
+        stopAllAudioCapture();
+        handleUserReply(typedInput.trim());
+        return;
+      }
+
+      // If user spoke or interim transcript exists, submit voice
+      if (liveInterimTranscript.trim() || audioRecorderRef.current?.getHasSpoken()) {
+        handleManualAudioSubmit();
+        return;
+      }
+
+      // If user hasn't spoken yet and tapped orb/mic to start speaking:
+      // Ensure microphone is actively listening and ready for voice input
+      if (!audioRecorderRef.current?.getIsRecording()) {
+        startVoiceListening();
+      }
+      setAgentState("listening");
+      return;
+    }
+
+    if (agentState === "stopped" || turnState === "ERROR") {
       // Resume listening
+      setTurnState("WAITING_FOR_USER");
+      console.log("VOICE STATE: WAITING_FOR_USER | microphone = ON");
+      setAgentState("listening");
       startVoiceListening();
       return;
     }
@@ -468,10 +574,171 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     };
   };
 
-  // Process user reply (voice, typed, or explicit chip selection)
+  // Process user audio directly with Gemini Multimodal AI
+  const handleUserAudioTurn = async (audioBase64: string, audioMimeType: string) => {
+    setAgentState("thinking");
+    stopSpeaking();
+    stopAllAudioCapture();
+
+    try {
+      const res = await fetch("/api/voice-agent-turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audioBase64,
+          audioMimeType,
+          currentProfile: profile,
+          currentLanguage,
+          pendingQuestionKey,
+          conversationHistory: messages.map((m) => ({
+            sender: m.sender,
+            text: getMessageText(m),
+          })),
+        }),
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => "");
+        throw new Error(`Server error ${res.status}: ${errorText.substring(0, 150)}`);
+      }
+
+      const data = await res.json();
+
+      if (data.hasSpeech === false || !data.userTranscript) {
+        // No speech detected in audio - remain waiting for user voice
+        setTurnState("WAITING_FOR_USER");
+        console.log("VOICE STATE: WAITING_FOR_USER (silence/no speech in audio)");
+        setAgentState("listening");
+        startVoiceListening();
+        return;
+      }
+
+      console.log(`VOICE INPUT RECEIVED: "${data.userTranscript}"`);
+
+      // 1. Add user reply
+      const userMsg: ConversationMessage = {
+        id: `user-${Date.now()}`,
+        sender: "user",
+        text: data.userTranscript,
+        timestamp: "Just now",
+      };
+      setMessages((prev) => [...prev, userMsg]);
+      setTypedInput("");
+
+      if (data.debug) {
+        setDebugInfo(data.debug);
+      }
+
+      // 2. Update profile
+      let mergedProfile = { ...profile };
+      if (data.extractedFields && Object.keys(data.extractedFields).length > 0) {
+        onUpdateProfile(data.extractedFields);
+        mergedProfile = { ...profile, ...data.extractedFields };
+      }
+
+      setProgressCount((prev) => Math.min(prev + 1, 6));
+
+      const profileReady = isProfileCompleteForResults(mergedProfile);
+
+      if (profileReady && (data.isReadyForResults || data.nextQuestion?.key === "completed")) {
+        const finishText =
+          currentLanguage === "bn"
+            ? "ধন্যবাদ। আপনার দেওয়া তথ্যের ভিত্তিতে আমি কিছু প্রাসঙ্গিক সরকারি প্রকল্প খুঁজে পেয়েছি।"
+            : currentLanguage === "hi"
+            ? "धन्यवाद। आपके द्वारा दी गई जानकारी के आधार पर मुझे कुछ उपयुक्त सरकारी योजनाएँ मिली हैं।"
+            : "Thank you! Based on your details, I have found relevant government schemes for you.";
+
+        console.log(`GEMINI RESPONSE: "${finishText}"`);
+
+        const finishMsg: ConversationMessage = {
+          id: `agent-${Date.now()}`,
+          sender: "agent",
+          text: "Thank you! Based on your details, I have found relevant government schemes for you.",
+          textBn: "ধন্যবাদ। আপনার দেওয়া তথ্যের ভিত্তিতে আমি কিছু প্রাসঙ্গিক সরকারি প্রকল্প খুঁজে পেয়েছি।",
+          textHi: "धन्यवाद। आपके द्वारा दी गई जानकारी के आधार पर मुझे कुछ उपयुक्त सरकारी योजनाएँ मिली हैं।",
+          timestamp: "Just now",
+          fieldKey: "completed",
+        };
+
+        setMessages((prev) => [...prev, finishMsg]);
+
+        if (data.assistantAudioBase64) {
+          setTurnState("ASSISTANT_SPEAKING");
+          console.log("VOICE STATE: ASSISTANT_SPEAKING | microphone = OFF");
+          setAgentState("speaking");
+          playDirectBase64Audio(data.assistantAudioBase64, () => {
+            setTimeout(() => onComplete(), 1200);
+          });
+        } else {
+          speakCurrentAgentMessage(finishText, () => {
+            setTimeout(() => onComplete(), 1200);
+          });
+        }
+        return;
+      }
+
+      // 3. Next question
+      let nextQ = data.nextQuestion;
+      if (!profileReady && (!nextQ || nextQ.key === "completed")) {
+        nextQ = getNextMissingQuestion(mergedProfile);
+      }
+
+      const agentReplyText =
+        currentLanguage === "bn"
+          ? nextQ.textBn || nextQ.textEn
+          : currentLanguage === "hi"
+          ? nextQ.textHi || nextQ.textEn
+          : nextQ.textEn;
+
+      console.log(`GEMINI RESPONSE: "${agentReplyText}"`);
+
+      const agentMsg: ConversationMessage = {
+        id: `agent-${Date.now()}`,
+        sender: "agent",
+        text: nextQ.textEn,
+        textBn: nextQ.textBn,
+        textHi: nextQ.textHi,
+        timestamp: "Just now",
+        fieldKey: nextQ.key,
+        suggestedAnswers: nextQ.suggestedAnswers || [],
+      };
+
+      setPendingQuestionKey(nextQ.key);
+      setCurrentSuggestedOptions(nextQ.suggestedAnswers || []);
+      setMessages((prev) => [...prev, agentMsg]);
+
+      // 4. Play speech and transition to WAITING_FOR_USER
+      if (data.assistantAudioBase64) {
+        setTurnState("ASSISTANT_SPEAKING");
+        console.log("VOICE STATE: ASSISTANT_SPEAKING | microphone = OFF");
+        setAgentState("speaking");
+        playDirectBase64Audio(data.assistantAudioBase64, () => {
+          setTurnState("WAITING_FOR_USER");
+          console.log("VOICE STATE: WAITING_FOR_USER | microphone = ON");
+          setAgentState("listening");
+          startVoiceListening();
+          setTimeout(() => textInputRef.current?.focus(), 100);
+        });
+      } else {
+        speakCurrentAgentMessage(agentReplyText, () => {
+          setTimeout(() => textInputRef.current?.focus(), 100);
+        });
+      }
+    } catch (err) {
+      console.error("Gemini Audio Turn error:", err);
+      setTurnState("WAITING_FOR_USER");
+      console.log("VOICE STATE: WAITING_FOR_USER | microphone = ON");
+      setAgentState("listening");
+      startVoiceListening();
+    }
+  };
+
+  // Process user reply (typed or explicit chip selection)
   const handleUserReply = async (userText: string) => {
     const trimmed = userText.trim();
     if (!trimmed) return;
+
+    console.log(`VOICE INPUT RECEIVED: "${trimmed}"`);
 
     // 1. Add user reply to messages
     const userMsg: ConversationMessage = {
@@ -485,11 +752,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     setTypedInput("");
     setAgentState("thinking");
     stopSpeaking();
-
-    // Stop listening while thinking
-    try {
-      recognitionRef.current?.stop();
-    } catch {}
+    stopAllAudioCapture();
 
     try {
       const res = await fetch("/api/voice-agent-turn", {
@@ -508,6 +771,18 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       });
 
       const data = await res.json();
+
+      if (data.debug) {
+        setDebugInfo(data.debug);
+        console.log("[Conversation Debug]", {
+          userMessage: data.debug.userMessage,
+          assistantReply: data.debug.assistantReply,
+          extractedFacts: data.debug.extractedFacts,
+          currentProfile: data.debug.currentProfile,
+          autoGeneratedUserInput: false,
+          demoInput: false,
+        });
+      }
 
       // 2. Update structured user profile ONLY with extracted fields from user input
       let mergedProfile = { ...profile };
@@ -562,6 +837,8 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
           : currentLanguage === "hi"
           ? nextQ.textHi || nextQ.textEn
           : nextQ.textEn;
+
+      console.log(`GEMINI RESPONSE: "${agentReplyText}"`);
 
       const agentMsg: ConversationMessage = {
         id: `agent-${Date.now()}`,
@@ -1006,6 +1283,27 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
                           {msg.text}
                         </p>
                       )}
+
+                      {/* Replay audio button */}
+                      {isAgent && (
+                        <div className="pt-1 flex items-center gap-1.5 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => speakCurrentAgentMessage(getMessageText(msg))}
+                            className="inline-flex items-center gap-1 text-[10px] text-indigo-600 hover:text-indigo-800 font-medium cursor-pointer transition-colors"
+                            title="Listen again"
+                          >
+                            <Volume2 className="w-3 h-3" />
+                            <span>
+                              {currentLanguage === "bn"
+                                ? "আবার শুনুন"
+                                : currentLanguage === "hi"
+                                ? "फिर से सुनें"
+                                : "Listen again"}
+                            </span>
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {!isAgent && (
@@ -1036,8 +1334,8 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Quick Answer Chips (Explicit click only) */}
-            {currentSuggestedOptions.length > 0 && agentState !== "thinking" && (
+            {/* Quick Answer Chips (Explicit click only when waiting for user) */}
+            {currentSuggestedOptions.length > 0 && turnState === "WAITING_FOR_USER" && (
               <div className="space-y-1 pt-1">
                 <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
                   <Sparkles className="w-3 h-3 text-indigo-600" />
@@ -1064,26 +1362,46 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
               </div>
             )}
 
+            {/* Visual Indicator for Microphone State (Listening, Processing, Idle, Speaking) */}
+            <MicrophoneStateIndicator
+              turnState={turnState}
+              currentLanguage={currentLanguage}
+              volumeLevel={micVolumeLevel}
+              interimTranscript={liveInterimTranscript}
+              hasSpeechDetected={turnState === "USER_SPEAKING"}
+              onMicClick={handleVoiceOrbClick}
+            />
+
             {/* Voice Orb Status */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs flex flex-col items-center justify-center space-y-2 text-center">
+            <div className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs flex flex-col items-center justify-center space-y-2.5 text-center">
               <VoiceOrb
-                state={agentState}
+                state={turnState}
                 onClick={handleVoiceOrbClick}
                 size="md"
+                volumeLevel={micVolumeLevel}
               />
 
-              <div className="space-y-0.5">
+              <div className="space-y-1 w-full flex flex-col items-center">
                 <div className="text-xs font-bold text-slate-900">
-                  {agentState === "listening" ? (
+                  {turnState === "WAITING_FOR_USER" ? (
                     <span className="text-emerald-700 flex items-center justify-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
                       {currentLanguage === "bn"
-                        ? "🎤 শুনছি... কথা বলুন বা নিচে টাইপ করুন"
+                        ? "🎤 মাইক্রোফোন চালু — কথা বলুন বা নিচে লিখুন"
                         : currentLanguage === "hi"
-                        ? "🎤 सुन रहा हूँ... बोलिए या नीचे टाइप करें"
-                        : "🎤 Listening... speak or type below"}
+                        ? "🎤 माइक्रोफ़ोन सक्रिय — बोलिए या नीचे लिखें"
+                        : "🎤 Microphone active — speak or type below"}
                     </span>
-                  ) : agentState === "speaking" ? (
+                  ) : turnState === "USER_SPEAKING" ? (
+                    <span className="text-indigo-700 flex items-center justify-center gap-1.5 animate-pulse">
+                      <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 animate-bounce" />
+                      {currentLanguage === "bn"
+                        ? "🎙️ আপনার কথা শুনছি..."
+                        : currentLanguage === "hi"
+                        ? "🎙️ आपकी आवाज़ सुन रहा हूँ..."
+                        : "🎙️ Listening to your voice..."}
+                    </span>
+                  ) : turnState === "ASSISTANT_SPEAKING" ? (
                     <span className="text-indigo-700 flex items-center justify-center gap-1.5">
                       <Volume2 className="w-3.5 h-3.5 animate-bounce" />
                       {currentLanguage === "bn"
@@ -1092,13 +1410,14 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
                         ? "सहायक बोल रहा है..."
                         : "Sahayak is speaking..."}
                     </span>
-                  ) : agentState === "thinking" ? (
-                    <span className="text-amber-700">
+                  ) : turnState === "PROCESSING_USER" ? (
+                    <span className="text-amber-700 flex items-center justify-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       {currentLanguage === "bn"
-                        ? "চিন্তা করছে..."
+                        ? "Gemini চিন্তা করছে ও উত্তর বিশ্লেষণ করছে..."
                         : currentLanguage === "hi"
-                        ? "सोच रहा है..."
-                        : "Thinking..."}
+                        ? "Gemini सोच रहा है और उत्तर समझ रहा है..."
+                        : "Gemini is analyzing your answer..."}
                     </span>
                   ) : (
                     <span className="text-slate-600">
@@ -1110,13 +1429,40 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
                     </span>
                   )}
                 </div>
+
+                {/* Real-time live speech caption preview */}
+                {liveInterimTranscript && (
+                  <div className="w-full max-w-xs px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-semibold flex items-center justify-center gap-1.5 shadow-2xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
+                    <span className="truncate">Hearing: "{liveInterimTranscript}"</span>
+                  </div>
+                )}
+
+                {/* 1-Tap Done Speaking / Send Button when user is speaking or listening */}
+                {(turnState === "WAITING_FOR_USER" || turnState === "USER_SPEAKING") && (
+                  <button
+                    id="btn-done-speaking-send"
+                    onClick={handleManualAudioSubmit}
+                    className="w-full max-w-xs py-2 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-emerald-200 active:scale-95 transition-all cursor-pointer mt-1"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>
+                      {currentLanguage === "bn"
+                        ? "কথা শেষ? উত্তর জমা দিন (Send Answer)"
+                        : currentLanguage === "hi"
+                        ? "बोलना पूरा? उत्तर भेजें (Send Answer)"
+                        : "Done Speaking? Send Answer"}
+                    </span>
+                  </button>
+                )}
               </div>
 
               {/* Action buttons: Repeat / Mic Toggle */}
               <div className="flex items-center gap-2 pt-0.5">
                 <button
                   onClick={handleRepeatQuestion}
-                  className="py-1 px-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 text-[11px] font-medium flex items-center gap-1 cursor-pointer active:scale-95 transition-all"
+                  disabled={turnState === "PROCESSING_USER"}
+                  className="py-1 px-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 text-[11px] font-medium flex items-center gap-1 cursor-pointer active:scale-95 transition-all disabled:opacity-40"
                 >
                   <RotateCcw className="w-3 h-3" />
                   <span>
@@ -1134,9 +1480,29 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
                 >
                   <Mic className="w-3 h-3" />
                   <span>
-                    {agentState === "listening"
-                      ? currentLanguage === "bn" ? "থামান" : "Stop Mic"
-                      : currentLanguage === "bn" ? "মাইক চালু করুন" : "Speak Now"}
+                    {turnState === "USER_SPEAKING"
+                      ? currentLanguage === "bn"
+                        ? "উত্তর জমা দিন"
+                        : currentLanguage === "hi"
+                        ? "उत्तर भेजें"
+                        : "Submit Voice"
+                      : turnState === "WAITING_FOR_USER"
+                      ? currentLanguage === "bn"
+                        ? "মাইক সক্রিয় (কথা বলুন)"
+                        : currentLanguage === "hi"
+                        ? "माइक सक्रिय (बोलिए)"
+                        : "Mic Active (Speak)"
+                      : turnState === "ASSISTANT_SPEAKING"
+                      ? currentLanguage === "bn"
+                        ? "থামান ও বলুন"
+                        : currentLanguage === "hi"
+                        ? "रोकें और बोलें"
+                        : "Stop & Speak"
+                      : currentLanguage === "bn"
+                      ? "মাইক চালু করুন"
+                      : currentLanguage === "hi"
+                      ? "माइक चालू करें"
+                      : "Speak Now"}
                   </span>
                 </button>
               </div>
@@ -1159,14 +1525,18 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
                   </span>
                 </span>
                 <span className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md font-semibold">
-                  Manual Demo & Typing
+                  Manual Typing & Voice
                 </span>
               </div>
 
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  handleUserReply(typedInput);
+                  if (typedInput.trim() && turnState !== "PROCESSING_USER") {
+                    stopSpeaking();
+                    stopAllAudioCapture();
+                    handleUserReply(typedInput.trim());
+                  }
                 }}
                 className="flex items-center gap-2"
               >
@@ -1175,6 +1545,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
                   type="text"
                   id="input-voice-user-response"
                   value={typedInput}
+                  disabled={turnState === "PROCESSING_USER"}
                   onChange={(e) => setTypedInput(e.target.value)}
                   placeholder={
                     pendingQuestionKey === "name"
@@ -1205,12 +1576,12 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
                       ? "এখানে উত্তর টাইপ করুন..."
                       : "Type your answer..."
                   }
-                  className="flex-1 text-xs px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-600 focus:bg-white text-slate-900 font-medium"
+                  className="flex-1 text-xs px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-600 focus:bg-white text-slate-900 font-medium disabled:opacity-50"
                 />
                 <button
                   type="submit"
                   id="btn-submit-user-reply"
-                  disabled={!typedInput.trim()}
+                  disabled={!typedInput.trim() || turnState === "PROCESSING_USER"}
                   className="py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-sm active:scale-95 transition-all flex items-center gap-1"
                 >
                   <span>{currentLanguage === "bn" ? "পাঠান" : currentLanguage === "hi" ? "भेजें" : "Send"}</span>
@@ -1221,6 +1592,14 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
           </>
         )}
       </main>
+
+      {/* Floating Interactive Live Debug Drawer */}
+      <ConversationDebugDrawer
+        debugInfo={debugInfo}
+        isOpen={isDebugOpen}
+        onClose={() => setIsDebugOpen(false)}
+        onOpen={() => setIsDebugOpen(true)}
+      />
 
       <BottomNav currentTab="schemes" onSelectTab={onSelectNavTab} />
     </div>
