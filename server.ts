@@ -261,14 +261,15 @@ async function startServer() {
     }
     // Remove non-base64 characters
     cleanBase64 = cleanBase64.replace(/[^A-Za-z0-9+/=]/g, "").trim();
-    if (cleanBase64.length < 32) return null;
+    if (cleanBase64.length < 64) return null;
 
     let mime = (audioMimeType || "audio/webm").split(";")[0].trim().toLowerCase();
     if (!mime || !mime.startsWith("audio/")) {
       mime = "audio/webm";
     }
 
-    const modelsToTry = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+    // Only multimodal models that support audio modality
+    const modelsToTry = ["gemini-3.7-flash", "gemini-flash-latest"];
 
     for (const model of modelsToTry) {
       try {
@@ -276,17 +277,13 @@ async function startServer() {
           model,
           contents: [
             {
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: mime,
-                    data: cleanBase64,
-                  },
-                },
-                {
-                  text: promptText,
-                },
-              ],
+              inlineData: {
+                mimeType: mime,
+                data: cleanBase64,
+              },
+            },
+            {
+              text: promptText,
             },
           ],
           config: {
@@ -310,7 +307,7 @@ async function startServer() {
           console.log(`[Sahayak Notice] Gemini audio model ${model} under temporary demand (503).`);
           continue;
         } else {
-          console.log(`[Sahayak Notice] Audio processing notice on ${model}: ${msg.substring(0, 80)}`);
+          console.log(`[Sahayak Notice] Audio processing notice on ${model}: ${msg.substring(0, 120)}`);
         }
       }
     }
@@ -973,7 +970,13 @@ Output ONLY a valid JSON object matching this schema:
     } catch (err: any) {
       console.error("AI Voice Agent Turn Error:", err);
       const fallback = extractUserFactsStrict(req.body?.userMessage, req.body?.currentProfile, req.body?.pendingQuestionKey, req.body?.currentLanguage);
-      res.json(fallback);
+      const cleanUserMsg = (req.body?.userMessage || "").trim();
+      res.json({
+        hasSpeech: Boolean(cleanUserMsg),
+        userTranscript: cleanUserMsg,
+        assistantAudioBase64: null,
+        ...fallback,
+      });
     }
   });
 

@@ -30,6 +30,7 @@ import {
 import { Header } from "./Header";
 import { BottomNav } from "./BottomNav";
 import { speakText, stopSpeaking } from "../utils/speech";
+import { hapticMicStart, hapticMicStop, hapticSuccess, hapticError } from "../utils/haptics";
 
 interface CivicReportingScreenProps {
   currentLanguage: LanguageCode;
@@ -231,20 +232,11 @@ export const DevelopmentVoiceAgent: React.FC<CivicReportingScreenProps> = ({
   const ui = getLocalizedUi();
   const staticIntro = getStaticIntroduction();
 
-  // Auto-play introduction audio when the page opens or when language changes
+  // Stop speech when language changes or unmounts
   useEffect(() => {
-    let cancelSpeech: (() => void) | null = null;
-    setIsInstructionPlaying(true);
-
-    const timer = setTimeout(() => {
-      cancelSpeech = speakText(staticIntro, currentLanguage, () => {
-        setIsInstructionPlaying(false);
-      });
-    }, 200);
-
+    stopSpeaking();
+    setIsInstructionPlaying(false);
     return () => {
-      clearTimeout(timer);
-      if (cancelSpeech) cancelSpeech();
       stopSpeaking();
       setIsInstructionPlaying(false);
     };
@@ -383,6 +375,7 @@ export const DevelopmentVoiceAgent: React.FC<CivicReportingScreenProps> = ({
 
       mediaRecorderRef.current = recorder;
       recorder.start(250); // Collect in 250ms chunks
+      hapticMicStart();
 
       setRecordingDurationSec(0);
       setVoiceState("RECORDING");
@@ -398,6 +391,7 @@ export const DevelopmentVoiceAgent: React.FC<CivicReportingScreenProps> = ({
       }, 1000);
     } catch (err: any) {
       console.error("Microphone permission/access error:", err);
+      hapticError();
       setMicError(
         currentLanguage === "bn"
           ? "মাইক্রোফোনের অনুমতি পাওয়া যায়নি। অনুগ্রহ করে ব্রাউজারে মাইক চালু করুন।"
@@ -411,6 +405,7 @@ export const DevelopmentVoiceAgent: React.FC<CivicReportingScreenProps> = ({
 
   // Stop Voice Recording
   const handleStopRecording = () => {
+    hapticMicStop();
     if (recordingTimerRef.current) {
       clearInterval(recordingTimerRef.current);
       recordingTimerRef.current = null;

@@ -1,5 +1,7 @@
 // Web Speech API helper for Multilingual TTS and Speech Recognition in Sahayak
 
+import { hapticMicStart, hapticMicStop, hapticSpeechDetected, hapticError } from "./haptics";
+
 // Female voice name identifiers across Windows, macOS, iOS, Android, Linux, and Chrome
 const FEMALE_VOICE_HINTS = [
   "female",
@@ -479,7 +481,11 @@ export async function testBengaliAudioIsolated(lang = "bn"): Promise<boolean> {
         audio.onended = () => {
           updateTtsDebugState({ status: "Idle" });
         };
-        await audio.play();
+        try {
+          await audio.play();
+        } catch (playErr) {
+          console.warn("[Sahayak Isolated TTS Play notice]:", playErr);
+        }
         return true;
       }
     }
@@ -610,9 +616,17 @@ function speakWithBrowserSynthesis(
   };
 
   utterance.onerror = (e) => {
-    if ((e as any).error !== "canceled" && (e as any).error !== "interrupted") {
-      console.warn("Browser TTS notice:", e);
+    const errType = (e as any)?.error;
+    if (errType === "canceled" || errType === "interrupted") {
+      // Deliberate cancellation - do not trigger completion buffer or onEnd
+      if (activeUtteranceSafetyTimer) {
+        clearTimeout(activeUtteranceSafetyTimer);
+        activeUtteranceSafetyTimer = null;
+      }
+      activeUtterance = null;
+      return;
     }
+    console.warn("Browser TTS notice:", e);
     finishSpeech();
   };
 
@@ -1002,6 +1016,7 @@ export function createSpeechRecognizer(
 
     recognition.onstart = () => {
       console.log(`[VOICE INPUT] Speech recognition session started successfully (lang: "${lang}")`);
+      hapticMicStart();
     };
 
     recognition.onresult = (event: any) => {
@@ -1021,6 +1036,7 @@ export function createSpeechRecognizer(
       if (interimTranscript) {
         lastKnownTranscript = interimTranscript.trim();
         console.log(`[VOICE INPUT] Interim transcript: "${interimTranscript}"`);
+        hapticSpeechDetected();
         if (onInterim) onInterim(interimTranscript);
       }
 
@@ -1035,11 +1051,13 @@ export function createSpeechRecognizer(
 
     recognition.onerror = (event: any) => {
       console.warn("[VOICE INPUT] Recognition error event:", event.error);
+      hapticError();
       onError?.(event.error);
     };
 
     recognition.onend = () => {
       console.log("[VOICE INPUT] Speech recognition session ended.");
+      hapticMicStop();
       // If recognition ended with an interim transcript that was never marked final, flush it
       if (lastKnownTranscript && lastKnownTranscript.length > 0) {
         console.log(`[VOICE INPUT] Flushing final recognized speech on end: "${lastKnownTranscript}"`);

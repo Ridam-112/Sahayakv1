@@ -35,6 +35,7 @@ import {
   VoiceLatencyMetrics,
 } from "../utils/speech";
 import { GeminiAudioRecorder } from "../utils/audioRecorder";
+import { hapticSuccess, hapticError, hapticTap, hapticMicStart, hapticMicStop } from "../utils/haptics";
 
 export type TurnState =
   | "IDLE"
@@ -351,6 +352,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
         (err) => {
           console.warn("[VOICE INPUT] Speech recognition notice:", err);
           if (err === "not-allowed" || err === "service-not-allowed") {
+            hapticError();
             setMicError(
               currentLanguage === "bn"
                 ? "মাইক্রোফোনের অনুমতি দেওয়া হয়নি। দয়া করে ব্রাউজারে অনুমতি দিন বা টাইপ করুন।"
@@ -393,6 +395,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       console.warn("Gemini Audio Recorder notice:", recorderErr);
       const errMsg = recorderErr?.message || String(recorderErr);
       if (errMsg.includes("Permission") || errMsg.includes("denied") || errMsg.includes("NotAllowedError")) {
+        hapticError();
         setMicError(
           currentLanguage === "bn"
             ? "মাইক্রোফোনের অনুমতি প্রয়োজন। অনুগ্রহ করে ব্রাউজারে অনুমতি দিন অথবা নিচে লিখুন।"
@@ -699,10 +702,12 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     stopAllAudioCapture();
 
     try {
+      const interimText = (liveInterimTranscript || typedInput || "").trim();
       const res = await fetch("/api/voice-agent-turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          userMessage: interimText,
           audioBase64,
           audioMimeType,
           currentProfile: profile,
@@ -759,6 +764,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       const profileReady = isProfileCompleteForResults(mergedProfile);
 
       if (profileReady && (data.isReadyForResults || data.nextQuestion?.key === "completed")) {
+        hapticSuccess();
         const finishText =
           currentLanguage === "bn"
             ? "ধন্যবাদ। আপনার দেওয়া তথ্যের ভিত্তিতে আমি কিছু প্রাসঙ্গিক সরকারি প্রকল্প খুঁজে পেয়েছি।"
@@ -914,6 +920,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       const profileReady = isProfileCompleteForResults(mergedProfile);
 
       if (profileReady && (data.isReadyForResults || data.nextQuestion?.key === "completed")) {
+        hapticSuccess();
         const finishText =
           currentLanguage === "bn"
             ? "ধন্যবাদ। আপনার দেওয়া তথ্যের ভিত্তিতে আমি কিছু প্রাসঙ্গিক সরকারি প্রকল্প খুঁজে পেয়েছি।"

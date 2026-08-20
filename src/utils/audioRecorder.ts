@@ -1,6 +1,8 @@
 // Persistent Audio Recorder & Input Manager for Gemini Voice Conversation
 // Keeps persistent MediaStream alive across conversational turns without tearing down microphone hardware.
 
+import { hapticMicStart, hapticMicStop, hapticSpeechDetected } from "./haptics";
+
 export interface AudioRecordingResult {
   blob: Blob;
   base64: string;
@@ -111,7 +113,9 @@ export class GeminiAudioRecorder {
           this.audioContext = new AudioCtx();
         }
         if (this.audioContext.state === "suspended") {
-          await this.audioContext.resume();
+          try {
+            await this.audioContext.resume();
+          } catch {}
         }
         const source = this.audioContext.createMediaStreamSource(this.mediaStream);
         this.analyser = this.audioContext.createAnalyser();
@@ -136,6 +140,7 @@ export class GeminiAudioRecorder {
     }
 
     this.isAcceptingInput = true;
+    hapticMicStart();
     console.log("[MIC STATE DEBUG]", {
       state: "acceptingUserInput = true",
       isListening: true,
@@ -202,6 +207,9 @@ export class GeminiAudioRecorder {
   public disableInput(reason: string = "Assistant speaking"): void {
     const prev = this.isAcceptingInput;
     this.isAcceptingInput = false;
+    if (prev) {
+      hapticMicStop();
+    }
     console.log("[MIC STATE DEBUG]", {
       state: "acceptingUserInput = false",
       isListening: false,
@@ -244,6 +252,7 @@ export class GeminiAudioRecorder {
    */
   public async stop(): Promise<AudioRecordingResult> {
     this.isAcceptingInput = false;
+    hapticMicStop();
     console.log("[MIC STATE DEBUG]", {
       state: "acceptingUserInput = false",
       isListening: false,
@@ -292,6 +301,7 @@ export class GeminiAudioRecorder {
    */
   public cancel(): void {
     this.isAcceptingInput = false;
+    hapticMicStop();
     console.log("[MIC STATE DEBUG]", {
       state: "acceptingUserInput = false",
       isListening: false,
@@ -402,6 +412,7 @@ export class GeminiAudioRecorder {
               if (!this.hasSpoken) {
                 this.hasSpoken = true;
                 this.speechStartTime = now;
+                hapticSpeechDetected();
                 this.options.onSpeechStart?.();
               }
               this.lastSpokenTime = now;
