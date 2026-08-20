@@ -89,7 +89,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     setMicVolumeLevel(0);
     setLiveInterimTranscript("");
     if (audioRecorderRef.current) {
-      audioRecorderRef.current.cancel();
+      audioRecorderRef.current.disableInput();
     }
     if (recognitionRef.current) {
       try {
@@ -100,7 +100,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
 
   // Initial debug log on mount: ensure strictly IDLE and mic OFF
   useEffect(() => {
-    console.log("VOICE STATE: IDLE | microphone = OFF");
+    console.log("[VOICE STATE]\nIDLE");
   }, []);
 
   // Preload greeting audio into memory as soon as component loads or language switches
@@ -154,15 +154,42 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     return msg.text;
   };
 
+  // Single authoritative function to transition from ASSISTANT_SPEAKING to WAITING_FOR_USER
+  const finishAssistantTurn = () => {
+    console.log(`[MIC] Transitioning to user turn after TTS speech ended + buffer delay at ${new Date().toISOString()}`);
+    console.log("[VOICE DEBUG]\nALL ASSISTANT AUDIO FINISHED");
+    console.log("[VOICE DEBUG]\nTURN CHANGE\nASSISTANT_SPEAKING → WAITING_FOR_USER");
+    setTurnState("WAITING_FOR_USER");
+    console.log("[MIC STATE CHANGE]", {
+      previous: "ASSISTANT_SPEAKING",
+      next: "WAITING_FOR_USER",
+      acceptingUserInput: true,
+      reason: "Scheme assistant audio finished - user turn begins",
+      caller: "finishAssistantTurn",
+    });
+    console.log("[VOICE STATE]\nWAITING_FOR_USER\nmicStream = ACTIVE\nacceptingUserInput = true");
+    console.log("[VOICE DEBUG]\nMIC ENABLED\nacceptingUserInput = true");
+    setAgentState("listening");
+    startVoiceListening();
+  };
+
   // Speak aloud helper with barge-in / interruption support
   const speakCurrentAgentMessage = (
     text: string,
     onDone?: () => void,
     metrics?: VoiceLatencyMetrics
   ) => {
-    // 1. Enter ASSISTANT_SPEAKING state and ensure microphone is OFF
+    // 1. Enter ASSISTANT_SPEAKING state and ensure microphone input is gated
     setTurnState("ASSISTANT_SPEAKING");
-    console.log("[TURN DEBUG] state = ASSISTANT_SPEAKING | microphone = OFF");
+    console.log("[MIC STATE CHANGE]", {
+      previous: "WAITING_FOR_USER/PROCESSING",
+      next: "ASSISTANT_SPEAKING",
+      acceptingUserInput: false,
+      reason: "Scheme assistant speaking - input gated",
+      caller: "SchemeVoiceAgent.speakCurrentAgentMessage",
+    });
+    console.log("[VOICE STATE]\nASSISTANT_SPEAKING\nmicStream = ACTIVE\nacceptingUserInput = false");
+    audioRecorderRef.current?.disableInput("Scheme assistant speaking");
 
     // Stop any active speech recognition while assistant speaks
     if (recognitionRef.current) {
@@ -172,10 +199,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     }
 
     if (isAudioMuted) {
-      setAgentState("listening");
-      setTurnState("WAITING_FOR_USER");
-      console.log("[TURN DEBUG] state = WAITING_FOR_USER (muted) | microphone = ON");
-      startVoiceListening();
+      finishAssistantTurn();
       onDone?.();
       return;
     }
@@ -191,10 +215,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
         // If user interrupted during speech, don't automatically override the new state
         if (!isInterruptedRef.current) {
           // 2. Only after audio finishes, transition to WAITING_FOR_USER and turn ON microphone
-          setTurnState("WAITING_FOR_USER");
-          console.log("[TURN DEBUG] state = WAITING_FOR_USER | microphone = ON");
-          setAgentState("listening");
-          startVoiceListening();
+          finishAssistantTurn();
         }
         onDone?.();
       },
@@ -214,11 +235,14 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     scrollToBottom();
   }, [messages, turnState, agentState]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount only
   useEffect(() => {
     return () => {
       stopSpeaking();
-      stopAllAudioCapture();
+      if (audioRecorderRef.current) {
+        audioRecorderRef.current.destroy();
+        audioRecorderRef.current = null;
+      }
     };
   }, []);
 
@@ -231,7 +255,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     // If conversation was active, reset so user starts fresh in new language
     if (hasStartedConversation) {
       setTurnState("IDLE");
-      console.log("[TURN DEBUG] state = IDLE (language changed) | microphone = OFF");
+      console.log("[VOICE STATE]\nIDLE");
       setAgentState("idle");
       setHasStartedConversation(false);
       setMessages([]);
@@ -239,51 +263,132 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     }
   };
 
-  // Start Voice Listening (Gemini Direct Audio with parallel Web Speech for real-time live captions)
-  const startVoiceListening = async () => {
-    setMicError(null);
-    setLiveInterimTranscript("");
-    stopAllAudioCapture();
-
-    // 1. Start Gemini Native Audio Recorder (high-precision multimodal audio understanding)
-    try {
-      const recorder = new GeminiAudioRecorder({
-        volumeThreshold: 0.012,
-        silenceThresholdMs: 3000,
+  const getOrCreateAudioRecorder = (): GeminiAudioRecorder => {
+    if (!audioRecorderRef.current) {
+      audioRecorderRef.current = new GeminiAudioRecorder({
+        volumeThreshold: 0.035,
+        silenceThresholdMs: 2800,
         onVolumeChange: (vol) => {
           setMicVolumeLevel(vol);
         },
         onSpeechStart: () => {
+          console.log("[MIC STATE DEBUG]", {
+            state: "turnState = USER_SPEAKING",
+            isListening: true,
+            acceptingUserInput: true,
+            sourceFunction: "SchemeVoiceAgent.onSpeechStart",
+            reason: "User voice activity detected by VAD",
+          });
           setTurnState("USER_SPEAKING");
-          console.log("VOICE STATE: USER_SPEAKING");
+          console.log("[VOICE STATE]\nUSER_SPEAKING\nmicStream = ACTIVE\nacceptingUserInput = true");
         },
         onSilenceTimeout: async () => {
-          if (recorder.getIsRecording()) {
+          const recorder = audioRecorderRef.current;
+          if (recorder && recorder.getIsRecording()) {
             const hasSpoken = recorder.getHasSpoken() || Boolean(liveInterimTranscript);
             if (!hasSpoken) {
-              // User has not spoken yet; keep waiting, do not interrupt
+              // User has not spoken yet; reset speech frame tracking and keep listening without interruption
+              recorder.resetTurnState();
               return;
             }
+            console.log("[MIC STATE DEBUG]", {
+              state: "turnState = PROCESSING_USER",
+              isListening: false,
+              acceptingUserInput: false,
+              sourceFunction: "SchemeVoiceAgent.onSilenceTimeout",
+              reason: "Silence timeout reached - submitting Scheme turn audio",
+            });
             setTurnState("PROCESSING_USER");
-            console.log("VOICE STATE: PROCESSING_USER");
+            console.log("[VOICE STATE]\nPROCESSING\nmicStream = ACTIVE\nacceptingUserInput = false");
             setAgentState("thinking");
             const result = await recorder.stop();
             if (result.base64 && (result.hasSpeech || recorder.getHasSpoken())) {
               handleUserAudioTurn(result.base64, result.mimeType);
             } else {
+              console.log("[MIC STATE DEBUG]", {
+                state: "turnState = WAITING_FOR_USER",
+                isListening: true,
+                acceptingUserInput: true,
+                sourceFunction: "SchemeVoiceAgent.onSilenceTimeout (no speech)",
+                reason: "Empty recording - resuming listening",
+              });
               setTurnState("WAITING_FOR_USER");
-              console.log("VOICE STATE: WAITING_FOR_USER (silence loop)");
+              console.log("[VOICE STATE]\nWAITING_FOR_USER\nmicStream = ACTIVE\nacceptingUserInput = true");
               setAgentState("listening");
               startVoiceListening();
             }
           }
         },
       });
+    }
+    return audioRecorderRef.current;
+  };
 
-      audioRecorderRef.current = recorder;
+  // Start Voice Listening (keeps persistent MediaStream alive across turns)
+  const startVoiceListening = async () => {
+    setMicError(null);
+    setLiveInterimTranscript("");
+
+    const langTag = currentLanguage === "hi" ? "hi-IN" : currentLanguage === "bn" ? "bn-IN" : "en-IN";
+    console.log(`[VOICE INPUT] Mic tap detected -> initiating voice capture (lang: ${langTag})`);
+
+    // Start Web SpeechRecognition in parallel for real-time text transcription
+    try {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+
+      const recognizer = createSpeechRecognizer(
+        langTag,
+        (transcript) => {
+          console.log(`[VOICE INPUT] Raw transcript received: "${transcript}"`);
+          console.log(`[VOICE INPUT] Transcript passed to app state: "${transcript}"`);
+          setLiveInterimTranscript(transcript);
+          setTypedInput(transcript);
+        },
+        (err) => {
+          console.warn("[VOICE INPUT] Speech recognition notice:", err);
+          if (err === "not-allowed" || err === "service-not-allowed") {
+            setMicError(
+              currentLanguage === "bn"
+                ? "মাইক্রোফোনের অনুমতি দেওয়া হয়নি। দয়া করে ব্রাউজারে অনুমতি দিন বা টাইপ করুন।"
+                : currentLanguage === "hi"
+                ? "माइक्रोफ़ोन की अनुमति नहीं है। कृपया अनुमति दें या टाइप करें।"
+                : "Microphone permission denied. Please allow microphone access or type below."
+            );
+          }
+        },
+        (interim) => {
+          console.log(`[VOICE INPUT] Real-time interim speech: "${interim}"`);
+          setLiveInterimTranscript(interim);
+          setTypedInput(interim);
+        }
+      );
+
+      if (recognizer) {
+        recognitionRef.current = recognizer;
+        recognizer.start();
+        console.log("[VOICE INPUT] Speech recognition session started successfully on mic tap.");
+      }
+    } catch (recErr) {
+      console.warn("[VOICE INPUT] Recognizer initialization note:", recErr);
+    }
+
+    try {
+      const recorder = getOrCreateAudioRecorder();
       await recorder.start();
+      console.log("[MIC STATE DEBUG]", {
+        state: "turnState = WAITING_FOR_USER",
+        isListening: true,
+        acceptingUserInput: true,
+        sourceFunction: "SchemeVoiceAgent.startVoiceListening",
+        reason: "Microphone listening activated for user turn",
+      });
+      setTurnState("WAITING_FOR_USER");
+      console.log("[VOICE STATE]\nWAITING_FOR_USER\nmicStream = ACTIVE\nacceptingUserInput = true");
       setAgentState("listening");
-      console.log("VOICE RECORDER: started successfully | listening for user speech");
     } catch (recorderErr: any) {
       console.warn("Gemini Audio Recorder notice:", recorderErr);
       const errMsg = recorderErr?.message || String(recorderErr);
@@ -304,6 +409,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       const textToSubmit = liveInterimTranscript.trim();
       stopAllAudioCapture();
       setTurnState("PROCESSING_USER");
+      console.log("[VOICE STATE]\nPROCESSING\nmicStream = ACTIVE\nacceptingUserInput = false");
       setAgentState("thinking");
       handleUserReply(textToSubmit);
       return;
@@ -312,6 +418,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     if (audioRecorderRef.current?.getIsRecording()) {
       const hasSpoken = audioRecorderRef.current.getHasSpoken();
       setTurnState("PROCESSING_USER");
+      console.log("[VOICE STATE]\nPROCESSING\nmicStream = ACTIVE\nacceptingUserInput = false");
       setAgentState("thinking");
       const result = await audioRecorderRef.current.stop();
       if (result.base64 && (hasSpoken || result.hasSpeech || result.durationMs >= 800)) {
@@ -319,6 +426,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       } else {
         // No speech detected, resume listening smoothly
         setTurnState("WAITING_FOR_USER");
+        console.log("[VOICE STATE]\nWAITING_FOR_USER\nmicStream = ACTIVE\nacceptingUserInput = true");
         setAgentState("listening");
         startVoiceListening();
       }
@@ -326,7 +434,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
   };
 
   // User explicitly starts the conversation
-  const handleStartConversation = () => {
+  const handleStartConversation = async () => {
     const startClicked = Date.now();
     const initMetrics: VoiceLatencyMetrics = {
       startClicked,
@@ -338,8 +446,16 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     setHasStartedConversation(true);
     setMicError(null);
     setTurnState("ASSISTANT_SPEAKING");
-    console.log("VOICE STATE: ASSISTANT_SPEAKING | microphone = OFF");
+    console.log("[VOICE STATE]\nASSISTANT_SPEAKING\nmicStream = ACTIVE\nacceptingUserInput = false");
     setAgentState("speaking");
+
+    // Initialize the audio session early so mic is warmed and ready for user turn
+    try {
+      const recorder = getOrCreateAudioRecorder();
+      await recorder.initAudioSession();
+    } catch (e) {
+      console.warn("Audio init notice:", e);
+    }
 
     const greetingData = getGreetingData(currentLanguage);
     const initialMsg: ConversationMessage = {
@@ -373,9 +489,9 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
   };
 
   // Toggle or Interruption handler on Voice Orb click
-  const handleVoiceOrbClick = () => {
+  const handleVoiceOrbClick = async () => {
     if (turnState === "IDLE" || !hasStartedConversation) {
-      handleStartConversation();
+      await handleStartConversation();
       return;
     }
 
@@ -384,9 +500,9 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       isInterruptedRef.current = true;
       stopSpeaking();
       setTurnState("WAITING_FOR_USER");
-      console.log("VOICE STATE: WAITING_FOR_USER (barge-in) | microphone = ON");
+      console.log("[VOICE STATE]\nWAITING_FOR_USER\nmicStream = ACTIVE\nacceptingUserInput = true");
       setAgentState("listening");
-      startVoiceListening();
+      await startVoiceListening();
       return;
     }
 
@@ -413,19 +529,21 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
 
       // If user hasn't spoken yet and tapped orb/mic to start speaking:
       // Ensure microphone is actively listening and ready for voice input
-      if (!audioRecorderRef.current?.getIsRecording()) {
-        startVoiceListening();
-      }
+      setTurnState("WAITING_FOR_USER");
+      console.log("[VOICE STATE]\nWAITING_FOR_USER\nmicStream = ACTIVE\nacceptingUserInput = true");
       setAgentState("listening");
+      if (!audioRecorderRef.current?.getIsRecording()) {
+        await startVoiceListening();
+      }
       return;
     }
 
     if (agentState === "stopped" || turnState === "ERROR") {
       // Resume listening
       setTurnState("WAITING_FOR_USER");
-      console.log("VOICE STATE: WAITING_FOR_USER | microphone = ON");
+      console.log("[VOICE STATE]\nWAITING_FOR_USER\nmicStream = ACTIVE\nacceptingUserInput = true");
       setAgentState("listening");
-      startVoiceListening();
+      await startVoiceListening();
       return;
     }
   };
@@ -607,7 +725,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       if (data.hasSpeech === false || !data.userTranscript) {
         // No speech detected in audio - remain waiting for user voice
         setTurnState("WAITING_FOR_USER");
-        console.log("VOICE STATE: WAITING_FOR_USER (silence/no speech in audio)");
+        console.log("[VOICE STATE]\nWAITING_FOR_USER\nmicStream = ACTIVE\nacceptingUserInput = true");
         setAgentState("listening");
         startVoiceListening();
         return;
@@ -664,8 +782,9 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
 
         if (data.assistantAudioBase64) {
           setTurnState("ASSISTANT_SPEAKING");
-          console.log("VOICE STATE: ASSISTANT_SPEAKING | microphone = OFF");
+          console.log("[VOICE STATE]\nASSISTANT_SPEAKING\nmicStream = ACTIVE\nacceptingUserInput = false");
           setAgentState("speaking");
+          audioRecorderRef.current?.disableInput();
           playDirectBase64Audio(data.assistantAudioBase64, () => {
             setTimeout(() => onComplete(), 1200);
           });
@@ -710,13 +829,11 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
       // 4. Play speech and transition to WAITING_FOR_USER
       if (data.assistantAudioBase64) {
         setTurnState("ASSISTANT_SPEAKING");
-        console.log("VOICE STATE: ASSISTANT_SPEAKING | microphone = OFF");
+        console.log("[VOICE STATE]\nASSISTANT_SPEAKING\nmicStream = ACTIVE\nacceptingUserInput = false");
         setAgentState("speaking");
+        audioRecorderRef.current?.disableInput("Assistant audio response");
         playDirectBase64Audio(data.assistantAudioBase64, () => {
-          setTurnState("WAITING_FOR_USER");
-          console.log("VOICE STATE: WAITING_FOR_USER | microphone = ON");
-          setAgentState("listening");
-          startVoiceListening();
+          finishAssistantTurn();
           setTimeout(() => textInputRef.current?.focus(), 100);
         });
       } else {
@@ -727,7 +844,7 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
     } catch (err) {
       console.error("Gemini Audio Turn error:", err);
       setTurnState("WAITING_FOR_USER");
-      console.log("VOICE STATE: WAITING_FOR_USER | microphone = ON");
+      console.log("[VOICE STATE]\nWAITING_FOR_USER\nmicStream = ACTIVE\nacceptingUserInput = true");
       setAgentState("listening");
       startVoiceListening();
     }
@@ -1578,6 +1695,28 @@ export const SchemeVoiceAgent: React.FC<SchemeVoiceAgentProps> = ({
                   }
                   className="flex-1 text-xs px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-600 focus:bg-white text-slate-900 font-medium disabled:opacity-50"
                 />
+                <button
+                  type="button"
+                  id="btn-inline-mic-toggle"
+                  onClick={() => {
+                    console.log("[VOICE INPUT] Inline input bar mic tapped.");
+                    handleVoiceOrbClick();
+                  }}
+                  disabled={turnState === "PROCESSING_USER"}
+                  className={`p-2.5 rounded-xl border transition-all flex items-center justify-center cursor-pointer ${
+                    turnState === "WAITING_FOR_USER" || turnState === "USER_SPEAKING"
+                      ? "bg-rose-500 text-white border-rose-600 animate-pulse shadow-xs"
+                      : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200"
+                  }`}
+                  title={
+                    turnState === "WAITING_FOR_USER" || turnState === "USER_SPEAKING"
+                      ? "Listening... Tap to finish"
+                      : "Tap to Speak"
+                  }
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+
                 <button
                   type="submit"
                   id="btn-submit-user-reply"

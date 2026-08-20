@@ -73,74 +73,123 @@ async function startServer() {
     return "Kore"; // Default natural warm female voice
   }
 
-  async function generateAndCacheAudio(text: string, rawVoiceName = "Kore"): Promise<string | null> {
+  async function fetchGoogleTTSAudio(text: string, lang = "bn-IN"): Promise<string | null> {
+    try {
+      const langCode = lang.startsWith("bn") ? "bn" : lang.startsWith("hi") ? "hi" : "en";
+      const cleanText = text.replace(/[*_#`[\]()]/g, " ").trim();
+      if (!cleanText) return null;
+
+      // Break into sentences/chunks under 180 chars if text is long
+      const chunks: string[] = [];
+      if (cleanText.length <= 180) {
+        chunks.push(cleanText);
+      } else {
+        const sentences = cleanText.split(/(?<=[।?!.\n])/g);
+        let cur = "";
+        for (const s of sentences) {
+          if ((cur + " " + s).length <= 180) {
+            cur = cur ? cur + " " + s : s;
+          } else {
+            if (cur) chunks.push(cur.trim());
+            cur = s;
+          }
+        }
+        if (cur) chunks.push(cur.trim());
+      }
+
+      const audioBuffers: Buffer[] = [];
+      for (const chunk of chunks) {
+        if (!chunk.trim()) continue;
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunk)}&tl=${langCode}&client=tw-ob`;
+        const resp = await fetch(url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          },
+        });
+        if (!resp.ok) {
+          throw new Error(`Google TTS HTTP ${resp.status}`);
+        }
+        const arrayBuf = await resp.arrayBuffer();
+        audioBuffers.push(Buffer.from(arrayBuf));
+      }
+
+      if (audioBuffers.length === 0) return null;
+      const combinedBuffer = Buffer.concat(audioBuffers);
+      return `data:audio/mp3;base64,${combinedBuffer.toString("base64")}`;
+    } catch (err: any) {
+      console.warn("[Sahayak Google TTS Fallback Notice]:", err?.message || err);
+      return null;
+    }
+  }
+
+  async function generateAndCacheAudio(
+    text: string,
+    rawVoiceName = "Kore",
+    lang = "bn-IN"
+  ): Promise<string | null> {
     const voiceName = resolveTTSVoice(rawVoiceName);
     const cleanText = text.replace(/[*_#`[\]()]/g, " ").trim();
     if (!cleanText) return null;
 
-    const cacheKey = `${voiceName}:${cleanText}`;
+    const cacheKey = `${lang}:${voiceName}:${cleanText}`;
     if (ttsAudioCache.has(cacheKey)) {
       return ttsAudioCache.get(cacheKey)!;
     }
 
-    if (Date.now() < ttsCooldownUntil) {
-      return null;
-    }
-
-    const ai = getGenAI();
-    if (!ai) return null;
-
-    // Direct speech synthesis prompt for native Bengali / Hindi intonation
-    const speechPrompt = cleanText.match(/[\u0980-\u09FF]/)
-      ? `Say naturally in Bengali with a warm, clear and friendly tone: ${cleanText}`
-      : cleanText.match(/[\u0900-\u097F]/)
-      ? `Say naturally in Hindi with a warm, clear and friendly tone: ${cleanText}`
-      : cleanText;
-
-    try {
-      const ttsResponse = await ai.models.generateContent({
-        model: "gemini-3.1-flash-tts-preview",
-        contents: [{ parts: [{ text: speechPrompt }] }],
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: voiceName,
+    // 1. Try Gemini Neural TTS (if not currently cooling down)
+    if (Date.now() >= ttsCooldownUntil) {
+      const ai = getGenAI();
+      if (ai) {
+        try {
+          const ttsResponse = await ai.models.generateContent({
+            model: "gemini-3.1-flash-tts-preview",
+            contents: [{ parts: [{ text: cleanText }] }],
+            config: {
+              responseModalities: [Modality.AUDIO],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: {
+                    voiceName: voiceName,
+                  },
+                },
               },
             },
-          },
-        },
-      });
+          });
 
-      const part = ttsResponse.candidates?.[0]?.content?.parts?.find((p) =>
-        p.inlineData?.mimeType?.includes("audio")
-      );
+          const part = ttsResponse.candidates?.[0]?.content?.parts?.find((p) =>
+            p.inlineData?.mimeType?.includes("audio")
+          );
 
-      if (!part || !part.inlineData?.data) {
-        return null;
+          if (part && part.inlineData?.data) {
+            const rawPcm = Buffer.from(part.inlineData.data, "base64");
+            const wavBuffer = pcmToWav(rawPcm, 24000);
+            const audioBase64 = `data:audio/wav;base64,${wavBuffer.toString("base64")}`;
+            ttsAudioCache.set(cacheKey, audioBase64);
+            return audioBase64;
+          }
+        } catch (e: any) {
+          const errMsg = e?.message || (typeof e === "object" ? JSON.stringify(e) : String(e));
+          if (errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("quota")) {
+            const match = errMsg.match(/retry in ([0-9.]+)s/i) || errMsg.match(/retryDelay":"([0-9]+)s"/i);
+            const retrySeconds = match && match[1] ? Math.ceil(parseFloat(match[1])) : 20;
+            ttsCooldownUntil = Date.now() + retrySeconds * 1000;
+            console.log(`[Sahayak TTS Notice] API rate limit reached. Cooling down Gemini TTS for ${retrySeconds}s, using neural fallback.`);
+          } else if (errMsg.includes("503") || errMsg.includes("UNAVAILABLE") || errMsg.includes("high demand")) {
+            ttsCooldownUntil = Date.now() + 10000;
+            console.log(`[Sahayak TTS Notice] TTS model under temporary high demand (503). Cooling down for 10s, using neural fallback.`);
+          }
+        }
       }
-
-      const rawPcm = Buffer.from(part.inlineData.data, "base64");
-      const wavBuffer = pcmToWav(rawPcm, 24000);
-      const audioBase64 = `data:audio/wav;base64,${wavBuffer.toString("base64")}`;
-      ttsAudioCache.set(cacheKey, audioBase64);
-      return audioBase64;
-    } catch (e: any) {
-      const errMsg = e?.message || (typeof e === "object" ? JSON.stringify(e) : String(e));
-      if (errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("quota")) {
-        const match = errMsg.match(/retry in ([0-9.]+)s/i) || errMsg.match(/retryDelay":"([0-9]+)s"/i);
-        const retrySeconds = match && match[1] ? Math.ceil(parseFloat(match[1])) : 20;
-        ttsCooldownUntil = Date.now() + retrySeconds * 1000;
-        console.log(`[Sahayak TTS Notice] API rate limit reached. Cooling down Gemini TTS for ${retrySeconds}s.`);
-      } else if (errMsg.includes("503") || errMsg.includes("UNAVAILABLE") || errMsg.includes("high demand")) {
-        ttsCooldownUntil = Date.now() + 10000;
-        console.log(`[Sahayak TTS Notice] TTS model under temporary high demand (503). Cooling down for 10s.`);
-      } else {
-        console.log(`[Sahayak TTS Notice] Audio generation notice: ${errMsg.substring(0, 120)}`);
-      }
-      return null;
     }
+
+    // 2. High-Reliability Native Audio Fallback (guarantees crystal-clear Bengali, Hindi, & English audio on all devices)
+    const fallbackAudio = await fetchGoogleTTSAudio(cleanText, lang);
+    if (fallbackAudio) {
+      ttsAudioCache.set(cacheKey, fallbackAudio);
+      return fallbackAudio;
+    }
+
+    return null;
   }
 
   // Resilient multi-model fallback executor for Gemini text tasks
@@ -186,6 +235,8 @@ async function startServer() {
     return null;
   }
 
+  let audioCooldownUntil = 0;
+
   // Gemini Multimodal Native Audio Understanding & Reasoning Executor
   async function generateContentWithAudio(
     audioBase64: string,
@@ -193,15 +244,31 @@ async function startServer() {
     promptText: string,
     contextName = "Gemini Native Audio Turn"
   ): Promise<string | null> {
+    if (Date.now() < audioCooldownUntil) {
+      return null;
+    }
+
     const ai = getGenAI();
     if (!ai) return null;
 
-    // Strip data URL prefix if provided
-    const cleanBase64 = audioBase64.replace(/^data:audio\/[a-zA-Z0-9.+_-]+;base64,/, "").trim();
-    if (!cleanBase64) return null;
+    if (!audioBase64 || typeof audioBase64 !== "string") return null;
 
-    const mime = (audioMimeType || "audio/webm").split(";")[0];
-    const modelsToTry = ["gemini-3.7-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+    // Safely strip data URL prefix (e.g. data:audio/webm;codecs=opus;base64, or any header before the comma)
+    let cleanBase64 = audioBase64.trim();
+    const commaIdx = cleanBase64.indexOf(",");
+    if (commaIdx !== -1 && cleanBase64.slice(0, commaIdx).toLowerCase().includes("base64")) {
+      cleanBase64 = cleanBase64.slice(commaIdx + 1);
+    }
+    // Remove non-base64 characters
+    cleanBase64 = cleanBase64.replace(/[^A-Za-z0-9+/=]/g, "").trim();
+    if (cleanBase64.length < 32) return null;
+
+    let mime = (audioMimeType || "audio/webm").split(";")[0].trim().toLowerCase();
+    if (!mime || !mime.startsWith("audio/")) {
+      mime = "audio/webm";
+    }
+
+    const modelsToTry = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
 
     for (const model of modelsToTry) {
       try {
@@ -232,7 +299,19 @@ async function startServer() {
         }
       } catch (err: any) {
         const msg = err?.message || (typeof err === "object" ? JSON.stringify(err) : String(err));
-        console.log(`[Sahayak Audio AI Notice] ${contextName} on ${model}: ${msg.substring(0, 120)}`);
+        if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota")) {
+          const match = msg.match(/retry in ([0-9.]+)s/i) || msg.match(/retryDelay":"([0-9]+)s"/i);
+          const retrySec = match && match[1] ? Math.ceil(parseFloat(match[1])) : 15;
+          audioCooldownUntil = Date.now() + retrySec * 1000;
+          console.log(`[Sahayak Notice] Gemini audio rate-limited on ${model}. Cooldown for ${retrySec}s.`);
+          break;
+        } else if (msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("high demand")) {
+          audioCooldownUntil = Date.now() + 8000;
+          console.log(`[Sahayak Notice] Gemini audio model ${model} under temporary demand (503).`);
+          continue;
+        } else {
+          console.log(`[Sahayak Notice] Audio processing notice on ${model}: ${msg.substring(0, 80)}`);
+        }
       }
     }
     return null;
@@ -283,24 +362,39 @@ Output JSON only:
   app.post("/api/tts", async (req, res) => {
     const startTime = Date.now();
     try {
-      const { text, language, voice } = req.body || {};
+      const { text, language = "bn-IN", voice } = req.body || {};
       if (!text || typeof text !== "string" || !text.trim()) {
         return res.status(400).json({ error: "Text is required" });
       }
 
+      // Map shorthand language codes to exact BCP-47 locale tags
+      const exactLangCode =
+        language === "bn" || language === "bn-IN"
+          ? "bn-IN"
+          : language === "hi" || language === "hi-IN"
+          ? "hi-IN"
+          : language === "en" || language === "en-IN"
+          ? "en-IN"
+          : language;
+
       const rawVoice = voice || "Kore";
       const voiceName = resolveTTSVoice(rawVoice);
       const cleanText = text.replace(/[*_#`[\]()]/g, " ").trim();
-      const cacheKey = `${voiceName}:${cleanText}`;
+      const cacheKey = `${exactLangCode}:${voiceName}:${cleanText}`;
+
+      console.log(
+        `[TTS CLOUD API CALL] Language: "${exactLangCode}" | Voice: "${voiceName}" | Model: "gemini-3.1-flash-tts-preview" | Text: "${cleanText.substring(0, 60)}..."`
+      );
 
       if (ttsAudioCache.has(cacheKey)) {
         const cachedBase64 = ttsAudioCache.get(cacheKey)!;
         const latencyMs = Date.now() - startTime;
-        console.log(`[Sahayak Audio Debug] Cache HIT | Time: ${latencyMs}ms | Text: "${cleanText.substring(0, 50)}..."`);
+        console.log(`[Sahayak Audio Debug] Cache HIT | Time: ${latencyMs}ms | Lang: "${exactLangCode}" | Text: "${cleanText.substring(0, 50)}..."`);
         return res.json({
           success: true,
           audioBase64: cachedBase64,
           format: "audio/wav",
+          language: exactLangCode,
           voice: voiceName,
           engine: "Gemini TTS (Cache)",
           browserSpeechSynthesisUsed: false,
@@ -310,19 +404,20 @@ Output JSON only:
       }
 
       console.log(`[Sahayak Audio Debug]
-language = ${language || "bn"}
+language = ${exactLangCode}
 text = "${cleanText.substring(0, 100)}"
 engine = "Gemini TTS"
 voice = ${voiceName}
 browserSpeechSynthesisUsed = false`);
 
-      const audioBase64 = await generateAndCacheAudio(cleanText, voiceName);
+      const audioBase64 = await generateAndCacheAudio(cleanText, voiceName, exactLangCode);
       if (!audioBase64) {
         // Return 200 with success: false and friendly reason so client handles smoothly without 500 error
         return res.json({
           success: false,
           error: "TTS_UNAVAILABLE",
           message: "Gemini TTS rate limited or unavailable",
+          language: exactLangCode,
           browserSpeechSynthesisUsed: false,
         });
       }
@@ -332,6 +427,7 @@ browserSpeechSynthesisUsed = false`);
         success: true,
         audioBase64,
         format: "audio/wav",
+        language: exactLangCode,
         voice: voiceName,
         engine: "Gemini TTS",
         browserSpeechSynthesisUsed: false,
@@ -1031,6 +1127,159 @@ Return ONLY a valid JSON object matching:
     res.json(createFallbackClassification());
   });
 
+  // Dedicated In-Memory Civic Reports Database Store (Preserving 100% Original Citizen Submissions)
+  const storedCivicReports: Array<{
+    id: string;
+    type: "voice" | "text";
+    originalAudioBase64?: string;
+    audioMimeType?: string;
+    durationSeconds?: number;
+    originalText?: string;
+    transcript?: string;
+    language: string;
+    timestamp: string;
+    sessionId?: string;
+    location?: {
+      state: string;
+      district?: string;
+      city?: string;
+      locality?: string;
+    };
+    status: string;
+    aiMetadata?: {
+      category?: string;
+      urgency?: string;
+      department?: string;
+      summary?: string;
+    };
+  }> = [];
+
+  // Submit Civic Report Endpoint (Voice or Text)
+  app.post("/api/submit-civic-report", async (req, res) => {
+    try {
+      const {
+        type = "text",
+        audioBase64,
+        audioMimeType = "audio/webm",
+        durationSeconds = 0,
+        text = "",
+        language = "bn",
+        sessionId = `sess-${Date.now().toString(36)}`,
+        location = { state: "West Bengal", district: "Dakshin Dinajpur", city: "Balurghat" },
+        timestamp = new Date().toISOString(),
+      } = req.body || {};
+
+      const reportId = `SHK-${type === "voice" ? "VR" : "TR"}-${Math.floor(10000 + Math.random() * 90000)}`;
+
+      let category = "roads";
+      let department = "Public Works Department";
+      let urgency = "medium";
+      let summary = "";
+      let transcript = "";
+
+      // For voice reports: store actual audio payload
+      if (type === "voice" && audioBase64) {
+        summary = "Voice report submitted by citizen";
+        // Optionally classify via Gemini audio metadata without modifying the original audio
+        if (getGenAI()) {
+          try {
+            const audioPrompt = `Listen to this citizen report. Output JSON only:
+{
+  "transcript": "<exact words in original script>",
+  "category": "roads" | "healthcare" | "drinking_water" | "schools_education" | "electricity" | "irrigation" | "drainage_flood" | "other",
+  "urgency": "low" | "medium" | "high" | "critical",
+  "department": "<Government department name>"
+}`;
+            const raw = await generateContentWithAudio(audioBase64, audioMimeType, audioPrompt, "Civic Audio Metadata");
+            if (raw) {
+              const p = JSON.parse(raw);
+              if (p.transcript) transcript = p.transcript;
+              if (p.category) category = p.category;
+              if (p.urgency) urgency = p.urgency;
+              if (p.department) department = p.department;
+            }
+          } catch {}
+        }
+      } else {
+        // For text reports: preserve exact original text
+        const lower = (text || "").toLowerCase();
+        if (lower.includes("হাসপাতাল") || lower.includes("doctor") || lower.includes("হাসপাতাল") || lower.includes("hospital")) {
+          category = "healthcare";
+          department = "Health & Family Welfare Department";
+          urgency = "high";
+        } else if (lower.includes("জল") || lower.includes("water") || lower.includes("পানি") || lower.includes("পানি")) {
+          category = "drinking_water";
+          department = "Public Health Engineering (PHE)";
+          urgency = "high";
+        } else if (lower.includes("বিদ্যুৎ") || lower.includes("electricity") || lower.includes("কারেন্ট")) {
+          category = "electricity";
+          department = "State Electricity Distribution";
+          urgency = "medium";
+        } else if (lower.includes("স্কুল") || lower.includes("school") || lower.includes("education")) {
+          category = "schools_education";
+          department = "School Education Department";
+          urgency = "medium";
+        } else {
+          category = "roads";
+          department = "Public Works Department (Roads)";
+          urgency = "medium";
+        }
+        summary = text;
+      }
+
+      const reportRecord = {
+        id: reportId,
+        type: type as "voice" | "text",
+        ...(type === "voice"
+          ? {
+              originalAudioBase64: audioBase64,
+              audioMimeType,
+              durationSeconds,
+              transcript,
+            }
+          : {
+              originalText: text,
+            }),
+        language,
+        timestamp,
+        sessionId,
+        location,
+        status: "submitted_to_database",
+        aiMetadata: {
+          category,
+          urgency,
+          department,
+          summary: summary || transcript || (type === "voice" ? "Audio recording preserved" : text),
+        },
+      };
+
+      storedCivicReports.unshift(reportRecord);
+      console.log(`[Sahayak Civic Database] New report registered: ${reportId} (Type: ${type}, Language: ${language})`);
+
+      return res.json({
+        success: true,
+        reportId,
+        message: "Report submitted to Sahayak civic database",
+        report: reportRecord,
+      });
+    } catch (err: any) {
+      console.error("[Sahayak Civic Submit Error]:", err);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to store report in civic database",
+      });
+    }
+  });
+
+  // Get Civic Reports List
+  app.get("/api/civic-reports", (req, res) => {
+    res.json({
+      success: true,
+      count: storedCivicReports.length,
+      reports: storedCivicReports,
+    });
+  });
+
   // Track 1 — Conversational Development Need Voice Interview Agent
   app.post("/api/development-agent-turn", async (req, res) => {
     const {
@@ -1082,12 +1331,18 @@ Current Step: ${conversationStep}
 Collected data so far: ${JSON.stringify(collectedData || {})}
 Recent conversation history: ${JSON.stringify(conversationHistory.slice(-4))}
 
+LANGUAGE & VOICE INSTRUCTIONS:
+- When Selected Language is "bn": Respond in natural spoken Bengali. Use standard conversational Bengali appropriate for an Indian Bengali-speaking citizen. Do not transliterate Bengali. Do not pronounce individual characters. Speak complete Bengali words and sentences.
+- When Selected Language is "hi": Respond in natural conversational Hindi. Speak complete Hindi words and sentences.
+- When Selected Language is "en": Respond in natural conversational English.
+- Do not switch language because the citizen uses occasional loanwords or names.
+
 CONVERSATIONAL RULES:
 1. UNDERSTAND WHAT THE CITIZEN SAYS:
    - Extract problem category, specific issue description, location (city/district), urgency, and community scope ONLY from what the user explicitly said.
    - Never invent facts.
 2. DYNAMIC CONVERSATION:
-   - If location (city/village) was NOT mentioned yet in collectedData or userMessage, acknowledge their problem empathetically and ask for their area/locality name.
+   - If location (city/village) was NOT mentioned yet in collectedData or userMessage, acknowledge their problem empathetically in ${currentLanguage === "bn" ? "natural Bengali" : currentLanguage === "hi" ? "natural Hindi" : "natural English"} and ask for their area/locality name.
    - If location IS already known but community scope is unclear, ask how many people/households are affected or if it is an urgent hazard.
    - If sufficient details (issue + location) are recorded, warmly confirm that the development request is structured and aggregated onto the Policymaker Dashboard for priority ranking. Set isComplete = true.
 

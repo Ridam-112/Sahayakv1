@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -13,10 +13,16 @@ import {
   ShieldCheck,
   Building,
   Filter,
+  Mic,
+  MicOff,
+  Search,
+  X,
+  AlertCircle,
 } from "lucide-react";
 import { Scheme, LanguageCode, NavTab, CitizenProfile } from "../types";
 import { Header } from "./Header";
 import { BottomNav } from "./BottomNav";
+import { createSpeechRecognizer } from "../utils/speech";
 
 interface SchemesResultsProps {
   schemes: Scheme[];
@@ -27,6 +33,7 @@ interface SchemesResultsProps {
   onSelectScheme: (scheme: Scheme) => void;
   onEditProfile: () => void;
   onRestartVoiceAgent: () => void;
+  onResetData?: () => void;
   currentLanguage: LanguageCode;
   onSelectLanguage: (lang: LanguageCode) => void;
   onSelectNavTab: (tab: NavTab) => void;
@@ -42,6 +49,7 @@ export const SchemesResults: React.FC<SchemesResultsProps> = ({
   onSelectScheme,
   onEditProfile,
   onRestartVoiceAgent,
+  onResetData,
   currentLanguage,
   onSelectLanguage,
   onSelectNavTab,
@@ -49,11 +57,113 @@ export const SchemesResults: React.FC<SchemesResultsProps> = ({
 }) => {
   const [activeFilter, setActiveFilter] = useState<"all" | "eligible" | "wishlist">("all");
   const [activeReasonModal, setActiveReasonModal] = useState<Scheme | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
 
-  // Filter schemes
+  // Cleanup recognizer on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
+
+  // Voice Search Handler
+  const handleToggleVoiceSearch = () => {
+    console.log("[VOICE INPUT] Mic tap detected in Schemes search bar.");
+    setMicError(null);
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      setIsListening(false);
+      return;
+    }
+
+    const langTag = currentLanguage === "hi" ? "hi-IN" : currentLanguage === "bn" ? "bn-IN" : "en-IN";
+    console.log(`[VOICE INPUT] Starting recognition for Schemes search query (lang: ${langTag})`);
+
+    const recognizer = createSpeechRecognizer(
+      langTag,
+      (transcript) => {
+        console.log(`[VOICE INPUT] Raw transcript received: "${transcript}"`);
+        console.log(`[VOICE INPUT] Transcript passed to app state (searchQuery): "${transcript}"`);
+        setSearchQuery(transcript);
+        setIsListening(false);
+      },
+      (err) => {
+        console.warn("[VOICE INPUT] Speech recognition error:", err);
+        setIsListening(false);
+        if (err === "not-allowed" || err === "service-not-allowed") {
+          setMicError(
+            currentLanguage === "bn"
+              ? "মাইক্রোফোনের অনুমতি দেওয়া হয়নি। অনুগ্রহ করে ব্রাউজারে অনুমতি দিন বা লিখে খুঁজুন।"
+              : currentLanguage === "hi"
+              ? "माइक्रोफ़ोन की अनुमति नहीं है। कृपया अनुमति दें या टाइप करके खोजें।"
+              : "Microphone access denied. Please allow microphone in browser or type search query."
+          );
+        } else {
+          setMicError(
+            currentLanguage === "bn"
+              ? "কথা শোনা সম্ভব হয়নি। আবার চেষ্টা করুন বা লিখে খুঁজুন।"
+              : currentLanguage === "hi"
+              ? "आवाज़ पहचान में त्रुटि। कृपया पुनः प्रयास करें या लिखें।"
+              : "Could not recognize speech. Please try again or type query."
+          );
+        }
+      },
+      (interim) => {
+        console.log(`[VOICE INPUT] Interim search transcript: "${interim}"`);
+        setSearchQuery(interim);
+      }
+    );
+
+    if (!recognizer) {
+      console.warn("[VOICE INPUT] SpeechRecognition is not supported on this browser.");
+      setMicError(
+        currentLanguage === "bn"
+          ? "আপনার ব্রাউজারে ভয়েস রিকগনিশন সমর্থিত নয়। অনুগ্রহ করে লিখে সার্চ করুন।"
+          : currentLanguage === "hi"
+          ? "आपके ब्राउज़र में वॉयस सर्च समर्थित नहीं है। कृपया लिखकर खोजें।"
+          : "Voice search is not supported in this browser. Please type to search."
+      );
+      return;
+    }
+
+    recognitionRef.current = recognizer;
+    try {
+      recognizer.start();
+      setIsListening(true);
+      console.log("[VOICE INPUT] recognition.start() called successfully.");
+    } catch (err) {
+      console.warn("[VOICE INPUT] Failed to start speech recognition:", err);
+      setIsListening(false);
+    }
+  };
+
+  // Filter schemes based on active tab and search query
   const filteredSchemes = schemes.filter((s) => {
-    if (activeFilter === "wishlist") return wishlistIds.includes(s.id);
-    if (activeFilter === "eligible") return s.status === "eligible";
+    if (activeFilter === "wishlist" && !wishlistIds.includes(s.id)) return false;
+    if (activeFilter === "eligible" && s.status !== "eligible") return false;
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const matchName = s.name.toLowerCase().includes(q);
+      const matchCode = s.code.toLowerCase().includes(q);
+      const matchDesc = s.description.toLowerCase().includes(q);
+      const matchBenefit = (s.benefitShort || "").toLowerCase().includes(q);
+      const matchTags = (s.tags || []).some((t) => t.toLowerCase().includes(q));
+      return matchName || matchCode || matchDesc || matchBenefit || matchTags;
+    }
+
     return true;
   });
 
@@ -84,6 +194,7 @@ export const SchemesResults: React.FC<SchemesResultsProps> = ({
         onSelectLanguage={onSelectLanguage}
         showBack={!!onBack}
         onBack={onBack}
+        onResetData={onResetData}
       />
 
       <main className="max-w-md mx-auto w-full px-4 py-4 space-y-4 flex-1 pb-24">
@@ -128,6 +239,18 @@ export const SchemesResults: React.FC<SchemesResultsProps> = ({
                 <RotateCcw className="w-3 h-3" />
                 <span>Re-interview</span>
               </button>
+
+              {onResetData && (
+                <button
+                  type="button"
+                  id="btn-reset-data-schemes-results"
+                  onClick={onResetData}
+                  className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 py-0.5 rounded-md border border-rose-200 flex items-center gap-1 cursor-pointer"
+                  title="Reset All Saved Data"
+                >
+                  <span>Reset</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -164,6 +287,98 @@ export const SchemesResults: React.FC<SchemesResultsProps> = ({
               </span>
             )}
           </div>
+        </div>
+
+        {/* Search & Voice Filter Bar */}
+        <div className="space-y-2">
+          <div className="relative flex items-center">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
+            <input
+              type="text"
+              id="input-schemes-search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={
+                currentLanguage === "bn"
+                  ? "প্রকল্পের নাম, সুবিধা বা বিষয় দিয়ে খুঁজুন..."
+                  : currentLanguage === "hi"
+                  ? "योजना का नाम, लाभ या विषय से खोजें..."
+                  : "Search schemes, benefits, or topics..."
+              }
+              className="w-full pl-9 pr-20 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 shadow-2xs transition-all"
+            />
+            <div className="absolute right-1.5 flex items-center gap-1">
+              {searchQuery && (
+                <button
+                  type="button"
+                  id="btn-clear-schemes-search"
+                  onClick={() => setSearchQuery("")}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  title="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                id="btn-schemes-voice-search"
+                onClick={handleToggleVoiceSearch}
+                className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+                  isListening
+                    ? "bg-rose-500 text-white animate-pulse shadow-xs"
+                    : "bg-indigo-50 hover:bg-indigo-100 text-indigo-700"
+                }`}
+                title={isListening ? "Listening... tap to finish" : "Search by voice / মুখে বলুন"}
+              >
+                {isListening ? (
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                    <Mic className="w-3.5 h-3.5" />
+                  </span>
+                ) : (
+                  <Mic className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Voice Listening Feedback */}
+          {isListening && (
+            <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-semibold animate-pulse">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-indigo-600 animate-ping" />
+                <span>
+                  {currentLanguage === "bn"
+                    ? "🎙️ আপনার কথা শুনছি... বলুন (যেমন: 'কৃষি' বা 'বৃত্তি')"
+                    : currentLanguage === "hi"
+                    ? "🎙️ आपकी आवाज़ सुन रहा हूँ... बोलिए (जैसे: 'किसान' या 'छात्रवृत्ति')"
+                    : "🎙️ Listening... Speak scheme keyword (e.g. 'farmer' or 'scholarship')"}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={handleToggleVoiceSearch}
+                className="text-[11px] font-bold text-indigo-700 hover:underline cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          {/* Microphone / Browser Error Message */}
+          {micError && (
+            <div className="flex items-start gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1 leading-snug">{micError}</div>
+              <button
+                type="button"
+                onClick={() => setMicError(null)}
+                className="text-amber-700 hover:text-amber-900 font-bold ml-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Tab Filters */}

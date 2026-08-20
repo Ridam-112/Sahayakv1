@@ -92,7 +92,23 @@ export function isBengaliVoice(voice: SpeechSynthesisVoice): boolean {
   const nameLower = (voice.name || "").toLowerCase();
   const uriLower = (voice.voiceURI || "").toLowerCase();
 
-  if (langLower === "bn" || langLower.startsWith("bn-") || langLower.startsWith("bn_")) {
+  // EXPLICIT REJECTION OF NON-BENGALI INDIC LOCALES (e.g. Assamese 'as-IN', Odia 'or-IN', etc.)
+  if (
+    langLower.startsWith("as") ||
+    langLower.startsWith("or") ||
+    nameLower.includes("assamese") ||
+    nameLower.includes("odia") ||
+    nameLower.includes("oriya")
+  ) {
+    return false;
+  }
+
+  if (
+    langLower === "bn-in" ||
+    langLower === "bn" ||
+    langLower.startsWith("bn-") ||
+    langLower.startsWith("bn_")
+  ) {
     return true;
   }
 
@@ -122,7 +138,21 @@ export function isHindiVoice(voice: SpeechSynthesisVoice): boolean {
   const nameLower = (voice.name || "").toLowerCase();
   const uriLower = (voice.voiceURI || "").toLowerCase();
 
-  if (langLower === "hi" || langLower.startsWith("hi-") || langLower.startsWith("hi_")) {
+  if (
+    langLower.startsWith("as") ||
+    langLower.startsWith("bn") ||
+    nameLower.includes("bengali") ||
+    nameLower.includes("assamese")
+  ) {
+    return false;
+  }
+
+  if (
+    langLower === "hi-in" ||
+    langLower === "hi" ||
+    langLower.startsWith("hi-") ||
+    langLower.startsWith("hi_")
+  ) {
     return true;
   }
 
@@ -148,17 +178,93 @@ export function isEnglishVoice(voice: SpeechSynthesisVoice): boolean {
 
 let loggedVoicesOnce = false;
 
+// Global TTS Debug State for Dev Indicator
+export interface TtsDebugInfo {
+  langCode: string;
+  engine: "Gemini Native Audio" | "Browser SpeechSynthesis" | "None (Voice Missing)" | "Idle";
+  voiceName: string;
+  status: "Idle" | "Speaking" | "Aborted (Missing Voice)" | "Error";
+  lastUtterancePreview?: string;
+  totalVoicesInstalled: number;
+  availableBengaliVoices: string[];
+}
+
+let currentTtsDebugInfo: TtsDebugInfo = {
+  langCode: "bn-IN",
+  engine: "Idle",
+  voiceName: "None",
+  status: "Idle",
+  totalVoicesInstalled: 0,
+  availableBengaliVoices: [],
+};
+
+const debugListeners = new Set<(info: TtsDebugInfo) => void>();
+
+export function getTtsDebugInfo(): TtsDebugInfo {
+  return currentTtsDebugInfo;
+}
+
+export function subscribeTtsDebugInfo(listener: (info: TtsDebugInfo) => void): () => void {
+  debugListeners.add(listener);
+  listener(currentTtsDebugInfo);
+  return () => {
+    debugListeners.delete(listener);
+  };
+}
+
+function updateTtsDebugState(partial: Partial<TtsDebugInfo>) {
+  currentTtsDebugInfo = { ...currentTtsDebugInfo, ...partial };
+  debugListeners.forEach((l) => {
+    try {
+      l(currentTtsDebugInfo);
+    } catch {}
+  });
+}
+
+// Convert shorthand language code to exact BCP-47 locale tag
+export function getExactLocaleCode(lang: string): string {
+  switch (lang?.toLowerCase()) {
+    case "bn":
+    case "bn-in":
+      return "bn-IN"; // Bengali (India)
+    case "hi":
+    case "hi-in":
+      return "hi-IN"; // Hindi (India)
+    case "en":
+    case "en-in":
+      return "en-IN"; // English (India)
+    case "en-us":
+      return "en-US";
+    case "te":
+      return "te-IN";
+    case "ta":
+      return "ta-IN";
+    default:
+      return lang ? `${lang}-IN` : "bn-IN";
+  }
+}
+
 export function getAvailableVoices(): SpeechSynthesisVoice[] {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
   const voices = window.speechSynthesis.getVoices();
+  const bnVoices = voices.filter((v) => isBengaliVoice(v)).map((v) => `${v.name} (${v.lang})`);
+
+  updateTtsDebugState({
+    totalVoicesInstalled: voices.length,
+    availableBengaliVoices: bnVoices,
+  });
+
   if (voices.length > 0 && !loggedVoicesOnce) {
     loggedVoicesOnce = true;
+    console.log(`[TTS VOICES LIST] Total ${voices.length} synthesizer voices detected on this device:`);
     try {
       console.table(
         voices.map((v) => ({
           name: v.name,
           lang: v.lang,
           localService: v.localService,
+          default: v.default,
+          uri: v.voiceURI,
         }))
       );
     } catch {}
@@ -180,94 +286,73 @@ export function findBestVoiceForLanguage(
   lang: string
 ): SpeechSynthesisVoice | null {
   if (!voices || voices.length === 0) return null;
+  const exactLocale = getExactLocaleCode(lang);
 
-  if (lang === "bn") {
-    // 1. Direct Bengali voices
-    const bnVoices = voices.filter((v) => isBengaliVoice(v));
-    if (bnVoices.length > 0) {
-      const femaleBn = bnVoices.find((v) => isFemaleVoice(v));
-      if (femaleBn) return femaleBn;
-      return bnVoices[0];
+  if (exactLocale === "bn-IN") {
+    // 1. Strict match for Bengali (India)
+    const bnInVoices = voices.filter(
+      (v) => (v.lang || "").toLowerCase().replace("_", "-") === "bn-in" && isBengaliVoice(v)
+    );
+    if (bnInVoices.length > 0) {
+      const femaleBnIn = bnInVoices.find((v) => isFemaleVoice(v));
+      return femaleBnIn || bnInVoices[0];
     }
 
-    // 2. Hindi fallback for Indic phonetics
-    const hiVoices = voices.filter((v) => isHindiVoice(v));
-    if (hiVoices.length > 0) {
-      const femaleHi = hiVoices.find((v) => isFemaleVoice(v));
-      if (femaleHi) return femaleHi;
-      return hiVoices[0];
+    // 2. Any verified Bengali voice
+    const anyBnVoices = voices.filter((v) => isBengaliVoice(v));
+    if (anyBnVoices.length > 0) {
+      const femaleBn = anyBnVoices.find((v) => isFemaleVoice(v));
+      return femaleBn || anyBnVoices[0];
     }
 
-    // 3. Indian English fallback
-    const inEnVoices = voices.filter((v) =>
-      (v.lang || "").toLowerCase().replace("_", "-").includes("en-in")
+    // CRITICAL: DO NOT FALL BACK TO ASSAMESE, HINDI, OR ENGLISH.
+    // Return null so the app safely displays text only rather than speaking with a wrong-language voice!
+    return null;
+  }
+
+  if (exactLocale === "hi-IN") {
+    const hiInVoices = voices.filter(
+      (v) => (v.lang || "").toLowerCase().replace("_", "-") === "hi-in" && isHindiVoice(v)
+    );
+    if (hiInVoices.length > 0) {
+      const femaleHiIn = hiInVoices.find((v) => isFemaleVoice(v));
+      return femaleHiIn || hiInVoices[0];
+    }
+
+    const anyHiVoices = voices.filter((v) => isHindiVoice(v));
+    if (anyHiVoices.length > 0) {
+      const femaleHi = anyHiVoices.find((v) => isFemaleVoice(v));
+      return femaleHi || anyHiVoices[0];
+    }
+
+    return null;
+  }
+
+  if (exactLocale === "en-IN" || exactLocale === "en-US") {
+    const inEnVoices = voices.filter(
+      (v) => (v.lang || "").toLowerCase().replace("_", "-") === "en-in" && isEnglishVoice(v)
     );
     if (inEnVoices.length > 0) {
       const femaleInEn = inEnVoices.find((v) => isFemaleVoice(v));
-      if (femaleInEn) return femaleInEn;
-      return inEnVoices[0];
+      return femaleInEn || inEnVoices[0];
     }
+
+    const anyEnVoices = voices.filter((v) => isEnglishVoice(v));
+    if (anyEnVoices.length > 0) {
+      const femaleEn = anyEnVoices.find((v) => isFemaleVoice(v));
+      return femaleEn || anyEnVoices[0];
+    }
+
+    return null;
   }
 
-  if (lang === "hi") {
-    // 1. Direct Hindi voices
-    const hiVoices = voices.filter((v) => isHindiVoice(v));
-    if (hiVoices.length > 0) {
-      const femaleHi = hiVoices.find((v) => isFemaleVoice(v));
-      if (femaleHi) return femaleHi;
-      return hiVoices[0];
-    }
-
-    // 2. Bengali fallback
-    const bnVoices = voices.filter((v) => isBengaliVoice(v));
-    if (bnVoices.length > 0) {
-      const femaleBn = bnVoices.find((v) => isFemaleVoice(v));
-      if (femaleBn) return femaleBn;
-      return bnVoices[0];
-    }
-
-    // 3. Indian English fallback
-    const inEnVoices = voices.filter((v) =>
-      (v.lang || "").toLowerCase().replace("_", "-").includes("en-in")
-    );
-    if (inEnVoices.length > 0) {
-      const femaleInEn = inEnVoices.find((v) => isFemaleVoice(v));
-      if (femaleInEn) return femaleInEn;
-      return inEnVoices[0];
-    }
-  }
-
-  if (lang === "en") {
-    const enVoices = voices.filter((v) => isEnglishVoice(v));
-    if (enVoices.length > 0) {
-      const inEnFemale = enVoices.find(
-        (v) => (v.lang.includes("IN") || v.lang.includes("in")) && isFemaleVoice(v)
-      );
-      if (inEnFemale) return inEnFemale;
-
-      const femaleEn = enVoices.find((v) => isFemaleVoice(v));
-      if (femaleEn) return femaleEn;
-
-      return enVoices[0];
-    }
-  }
-
-  // Other regional languages matching prefix
-  const matching = voices.filter((v) =>
-    (v.lang || "").toLowerCase().replace("_", "-").startsWith(lang)
-  );
-  if (matching.length > 0) {
-    const femaleMatch = matching.find((v) => isFemaleVoice(v));
-    return femaleMatch || matching[0];
-  }
-
-  // Fallback to default system voice
-  return voices.find((v) => v.default) || voices[0] || null;
+  return null;
 }
 
 let currentPlayingAudio: HTMLAudioElement | null = null;
 let activeUtterance: SpeechSynthesisUtterance | null = null;
 let activeUtteranceSafetyTimer: any = null;
+let activeTrailingBufferTimer: any = null;
 const clientAudioCache = new Map<string, string>();
 let audioUnlocked = false;
 
@@ -353,18 +438,23 @@ export async function preloadTTSAudio(
 
 // Isolated Bengali/Hindi/English Audio test function
 export async function testBengaliAudioIsolated(lang = "bn"): Promise<boolean> {
+  const exactLocale = getExactLocaleCode(lang);
   const testTexts: Record<string, string> = {
-    bn: "নমস্কার, আমি সহায়ক। আপনার জন্য উপযুক্ত সরকারি প্রকল্প খুঁজে দিতে আমি সাহায্য করতে পারি।",
-    hi: "नमस्ते, मैं सहायक हूँ। आपके लिए सही सरकारी योजनाएँ ढूँढने में मैं आपकी मदद कर सकती हूँ।",
-    en: "Hello, I am Sahayak. I can help you discover verified government welfare schemes.",
+    "bn-IN": "নমস্কার, আমি সহায়ক। আপনার জন্য উপযুক্ত সরকারি প্রকল্প খুঁজে দিতে আমি সাহায্য করতে পারি।",
+    "hi-IN": "नमस्ते, मैं सहायक हूँ। आपके लिए सही सरकारी योजनाएँ ढूँढने में मैं आपकी मदद कर सकती हूँ।",
+    "en-IN": "Hello, I am Sahayak. I can help you discover verified government welfare schemes.",
   };
 
-  const testText = testTexts[lang] || testTexts.bn;
-  console.log(`[Sahayak Audio Debug]
-language = ${lang}
-text = "${testText}"
-engine = "Gemini TTS"
-voice = Kore`);
+  const testText = testTexts[exactLocale] || testTexts["bn-IN"];
+  console.log(`[TTS LANGUAGE DEBUG] Testing isolated audio | Language code: "${exactLocale}" (requested: "${lang}")`);
+
+  updateTtsDebugState({
+    langCode: exactLocale,
+    engine: "Gemini Native Audio",
+    voiceName: `Kore (${exactLocale})`,
+    status: "Speaking",
+    lastUtterancePreview: testText,
+  });
 
   try {
     const res = await fetch("/api/tts", {
@@ -372,68 +462,37 @@ voice = Kore`);
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         text: testText,
-        language: lang,
+        language: exactLocale,
         voice: "Kore",
       }),
     });
 
-    if (!res.ok) {
-      throw new Error(`TTS server response error: ${res.statusText}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.audioBase64) {
+        stopSpeaking();
+        const audioSrc = data.audioBase64.startsWith("data:")
+          ? data.audioBase64
+          : `data:audio/wav;base64,${data.audioBase64}`;
+        const audio = new Audio(audioSrc);
+        currentPlayingAudio = audio;
+        audio.onended = () => {
+          updateTtsDebugState({ status: "Idle" });
+        };
+        await audio.play();
+        return true;
+      }
     }
-
-    const data = await res.json();
-    if (data.audioBase64) {
-      stopSpeaking();
-      const audio = new Audio(data.audioBase64);
-      currentPlayingAudio = audio;
-      await audio.play();
-      return true;
-    }
-    return false;
   } catch (err) {
-    console.error("[Sahayak Isolated TTS Error]:", err);
-    return false;
+    console.warn("[Sahayak Isolated TTS Cloud Fallback]:", err);
   }
+
+  // Resilient fallback to browser synthesis
+  speakWithBrowserSynthesis(testText, exactLocale, Date.now());
+  return true;
 }
 
-const BENGALI_COMMON_PHRASES: Record<string, string> = {
-  "নমস্কার, আমি সহায়ক। আপনার প্রয়োজন এবং যোগ্যতার ভিত্তিতে উপযুক্ত সরকারি প্রকল্প খুঁজে দিতে পারি। তার জন্য আপনাকে কয়েকটি প্রশ্ন করব। প্রথমে আপনার নামটা বলুন।":
-    "Nomoshkar, aami Sahayak. Aapnar proyojon ebong joggotar bhittite upojukto sorkari prokolpo khuje dite paari. Taar jonno aapnake koyekti proshno korbo. Prothome aapnar naamta bolun.",
-  "আপনার বয়স কত বছর?": "Aapnar boyosh koto bochhor?",
-  "আপনার পেশা বা জীবিকা কী? যেমন: কৃষক, শ্রমিক, ছোট ব্যবসায়ী, ছাত্র, বা গৃহিণী?":
-    "Aapnar pesha ba jeebika ki? Jemon: krishok, shromik, chhoto byabosaayee, chhaatro, ba grihinee?",
-  "আপনার পরিবারের বার্ষিক আনুমানিক আয় কত টাকা?": "Aapnar poribaarer baarshik aanumaanik aay koto taka?",
-  "আপনার পরিবারের কি কোনো রেশন কার্ড আছে? যেমন: AAY, BPL, SPHH, PHH, RKSY?":
-    "Aapnar poribaarer ki kono Ration card aachhe? Jemon: AAY, BPL, SPHH, PHH, ba RKSY?",
-  "আপনার পরিবারের কোনো সদস্য কি বিশেষভাবে সক্ষম বা প্রতিবন্ধী?":
-    "Aapnar poribaarer kono sodosyo ki bisheshbhabe sokhom ba protibondhi?",
-  "ধন্যবাদ! আপনার দেওয়া তথ্যের ভিত্তিতে উপযুক্ত সরকারি প্রকল্প খোঁজা হচ্ছে...":
-    "Dhonnobaad! Aapnar deowa tothyer bhittite upojukto sorkari prokolpo khoja hochhe...",
-};
-
-function romanizeBengali(text: string): string {
-  const trimmed = text.trim();
-  if (BENGALI_COMMON_PHRASES[trimmed]) {
-    return BENGALI_COMMON_PHRASES[trimmed];
-  }
-  const map: Record<string, string> = {
-    'অ': 'o', 'আ': 'aa', 'ই': 'i', 'ঈ': 'ee', 'উ': 'u', 'ঊ': 'oo', 'ঋ': 'ri',
-    'এ': 'e', 'ঐ': 'oi', 'ও': 'o', 'ঔ': 'ou',
-    'ক': 'k', 'খ': 'kh', 'গ': 'g', 'ঘ': 'gh', 'ঙ': 'ng',
-    'চ': 'ch', 'ছ': 'chh', 'জ': 'j', 'ঝ': 'jh', 'ঞ': 'n',
-    'ট': 't', 'ঠ': 'th', 'ড': 'd', 'ঢ': 'dh', 'ণ': 'n',
-    'ত': 't', 'থ': 'th', 'দ': 'd', 'ধ': 'dh', 'ন': 'n',
-    'প': 'p', 'ফ': 'ph', 'ব': 'b', 'ভ': 'bh', 'ম': 'm',
-    'য': 'j', 'র': 'r', 'ল': 'l', 'শ': 'sh', 'ষ': 'sh', 'স': 's', 'হ': 'h',
-    'ড়': 'r', 'ঢ়': 'rh', 'য়': 'y', 'ৎ': 't', 'ং': 'ng', 'ঃ': 'h', 'ঁ': '',
-    'া': 'aa', 'ি': 'i', 'ী': 'ee', 'ু': 'u', 'ূ': 'oo', 'ৃ': 'ri',
-    'ে': 'e', 'ৈ': 'oi', 'ো': 'o', 'ৌ': 'ou', '্': '',
-    '।': '.', '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9'
-  };
-  return text.split('').map(c => map[c] !== undefined ? map[c] : c).join('').replace(/\s+/g, ' ').trim();
-}
-
-// Fallback browser speech synthesis runner
+// Resilient browser speech synthesis runner - strictly sets exact locale and uses verified voice if available
 function speakWithBrowserSynthesis(
   cleanText: string,
   lang: string,
@@ -446,6 +505,9 @@ function speakWithBrowserSynthesis(
     onEnd?.();
     return () => {};
   }
+
+  const exactLocale = getExactLocaleCode(lang);
+  console.log(`[TTS LANGUAGE DEBUG] Browser SpeechSynthesis | Exact Language Code: "${exactLocale}" (requested: "${lang}")`);
 
   // Clear any existing active speech utterance and timeout
   if (activeUtteranceSafetyTimer) {
@@ -461,30 +523,52 @@ function speakWithBrowserSynthesis(
   const voices = getAvailableVoices();
   const matchedVoice = findBestVoiceForLanguage(voices, lang);
 
-  // If browser has no native Bengali voice and uses an English/Indian English voice,
-  // romanize text so it pronounces native Bengali phonetics cleanly
-  let textToSpeak = cleanText;
-  if (lang === "bn" && (!matchedVoice || !isBengaliVoice(matchedVoice))) {
-    textToSpeak = romanizeBengali(cleanText);
-  }
+  console.log("[AUDIO OUTPUT PIPELINE] Browser SpeechSynthesis");
+  console.log("[TTS DEBUG]\npipeline = Browser TTS");
 
-  const utterance = new SpeechSynthesisUtterance(textToSpeak);
+  // Preserve the complete, natural sentence. Never split into characters or romanize.
+  const utterance = new SpeechSynthesisUtterance(cleanText);
   activeUtterance = utterance;
+
+  // Set exact locale code
+  utterance.lang = exactLocale;
+  utterance.rate = 0.95;
+  utterance.pitch = 1.0;
 
   if (matchedVoice) {
     utterance.voice = matchedVoice;
-    utterance.lang = matchedVoice.lang;
+    console.log(
+      `[TTS DEBUG] Matched Voice Found: "${matchedVoice.name}" | Voice Lang: "${matchedVoice.lang}" | Assigned Lang: "${exactLocale}"`
+    );
+    updateTtsDebugState({
+      langCode: exactLocale,
+      engine: "Browser SpeechSynthesis",
+      voiceName: `${matchedVoice.name} (${matchedVoice.lang})`,
+      status: "Speaking",
+      lastUtterancePreview: cleanText.substring(0, 60),
+    });
   } else {
-    utterance.lang = lang === "bn" ? "en-IN" : lang === "hi" ? "hi-IN" : "en-IN";
+    console.log(
+      `[TTS DEBUG] Using browser built-in synthesizer with lang="${exactLocale}"`
+    );
+    updateTtsDebugState({
+      langCode: exactLocale,
+      engine: "Browser SpeechSynthesis",
+      voiceName: `Browser Native Voice (${exactLocale})`,
+      status: "Speaking",
+      lastUtterancePreview: cleanText.substring(0, 60),
+    });
   }
-
-  utterance.rate = 0.95;
-  utterance.pitch = 1.05;
 
   let hasEnded = false;
   const finishSpeech = () => {
     if (hasEnded) return;
     hasEnded = true;
+    console.log(`[TTS] Speech END (Browser SpeechSynthesis onend fired) at ${new Date().toISOString()}`);
+    console.log("[VOICE]\nassistantAudioEnded = true");
+    updateTtsDebugState({
+      status: "Idle",
+    });
     if (activeUtteranceSafetyTimer) {
       clearTimeout(activeUtteranceSafetyTimer);
       activeUtteranceSafetyTimer = null;
@@ -492,10 +576,20 @@ function speakWithBrowserSynthesis(
     if (activeUtterance === utterance) {
       activeUtterance = null;
     }
-    onEnd?.();
+
+    // Strict Buffer: Wait 400ms after speech ends before activating downstream listener/mic
+    console.log(`[TTS] Applying 400ms buffer delay after TTS before signaling completion...`);
+    if (activeTrailingBufferTimer) clearTimeout(activeTrailingBufferTimer);
+    activeTrailingBufferTimer = setTimeout(() => {
+      activeTrailingBufferTimer = null;
+      console.log(`[TTS] Buffer delay completed at ${new Date().toISOString()} -> invoking onEnd callback`);
+      onEnd?.();
+    }, 400);
   };
 
   utterance.onstart = () => {
+    console.log(`[TTS] Speech START (Browser SpeechSynthesis): "${cleanText.substring(0, 60)}..." [lang=${exactLocale}] at ${new Date().toISOString()}`);
+    console.log("[VOICE]\nassistantAudioStarted = true");
     const audioPlaybackStarted = Date.now();
     const timeToFirstAudioMs = audioPlaybackStarted - startTs;
     const metrics: VoiceLatencyMetrics = {
@@ -522,11 +616,13 @@ function speakWithBrowserSynthesis(
     finishSpeech();
   };
 
-  // Safety timer to prevent assistant from getting stuck if browser fails to trigger onend
-  const estimatedDurationMs = Math.max(3000, Math.min(20000, cleanText.length * 110));
+  // Safety fallback timer to prevent assistant from getting stuck if browser fails to trigger onend
+  // Set generously so it NEVER cuts off genuine long Indian language utterances
+  const safetyTimeoutMs = Math.max(45000, cleanText.length * 350);
   activeUtteranceSafetyTimer = setTimeout(() => {
+    console.warn(`[TTS] Safety timeout reached (${safetyTimeoutMs}ms), forcing speech completion.`);
     finishSpeech();
-  }, estimatedDurationMs + 2000);
+  }, safetyTimeoutMs);
 
   // Short delay to avoid Chrome's immediate cancel-before-speak race condition
   setTimeout(() => {
@@ -540,9 +636,13 @@ function speakWithBrowserSynthesis(
       console.warn("Speech synthesis speak error:", err);
       finishSpeech();
     }
-  }, 30);
+  }, 40);
 
   return () => {
+    if (activeTrailingBufferTimer) {
+      clearTimeout(activeTrailingBufferTimer);
+      activeTrailingBufferTimer = null;
+    }
     finishSpeech();
     try {
       window.speechSynthesis.cancel();
@@ -565,24 +665,80 @@ export function speakText(
     return () => {};
   }
 
+  const exactLocale = getExactLocaleCode(lang);
+  console.log(`[TTS LANGUAGE DEBUG] Language code: "${exactLocale}" (requested: "${lang}")`);
+
   // STOP previous audio playback and speech
   stopSpeaking();
 
   let isCancelled = false;
-  const cacheKey = `${lang}:Kore:${cleanText}`;
+  const cacheKey = `${exactLocale}:Kore:${cleanText}`;
   const requestStarted = Date.now();
 
   const logMetrics = (metrics: VoiceLatencyMetrics) => {
     onLatencyUpdate?.(metrics);
   };
 
-  const playBase64Audio = (audioBase64: string) => {
+  const playBase64Audio = (rawAudioBase64: string) => {
     if (isCancelled) return;
+    console.log("[AUDIO OUTPUT PIPELINE] Gemini Native Audio");
+    console.log("[TTS DEBUG]\npipeline = Gemini Native Audio");
+    console.log(`[TTS LANGUAGE DEBUG] Playing Gemini Native Audio for locale "${exactLocale}"`);
+    console.log("[VOICE]\nGEMINI AUDIO RESPONSE STARTED");
+    console.log("[VOICE]\nassistantAudioStarted = true");
+    console.log("[VOICE DEBUG]\nAUDIO START\nassistantSpeaking = true");
+    console.log("[VOICE DEBUG]\nBUFFER START\npendingBuffers = 1");
+    console.log("[VOICE DEBUG]\nGEMINI TURN COMPLETE");
+
+    updateTtsDebugState({
+      langCode: exactLocale,
+      engine: "Gemini Native Audio",
+      voiceName: `Kore (${exactLocale})`,
+      status: "Speaking",
+      lastUtterancePreview: cleanText.substring(0, 60),
+    });
+
     const audioDecodeStarted = Date.now();
-    const audio = new Audio(audioBase64);
+    const audioSrc = rawAudioBase64.startsWith("data:")
+      ? rawAudioBase64
+      : `data:audio/wav;base64,${rawAudioBase64}`;
+    const audio = new Audio(audioSrc);
     currentPlayingAudio = audio;
 
+    let hasHandledCompletion = false;
+    let fallbackTimer: any = null;
+
+    const notifyPlaybackFinished = () => {
+      if (hasHandledCompletion) return;
+      hasHandledCompletion = true;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+
+      console.log(`[TTS] Speech END (Audio element ended event fired) at ${new Date().toISOString()}`);
+      console.log("[VOICE DEBUG]\nBUFFER END\npendingBuffers = 0");
+      console.log("[VOICE DEBUG]\nALL ASSISTANT AUDIO FINISHED");
+      console.log("[VOICE]\nassistantAudioEnded = true");
+      console.log("[VOICE]\nGEMINI AUDIO RESPONSE ENDED");
+
+      updateTtsDebugState({ status: "Idle" });
+
+      if (currentPlayingAudio === audio) {
+        currentPlayingAudio = null;
+      }
+
+      // Strict Buffer: Wait 400ms after speech ends before activating downstream listener/mic
+      console.log(`[TTS] Applying 400ms buffer delay after TTS before signaling completion...`);
+      if (activeTrailingBufferTimer) clearTimeout(activeTrailingBufferTimer);
+      activeTrailingBufferTimer = setTimeout(() => {
+        activeTrailingBufferTimer = null;
+        if (!isCancelled) {
+          console.log(`[TTS] Buffer delay completed at ${new Date().toISOString()} -> invoking onEnd callback`);
+          onEnd?.();
+        }
+      }, 400);
+    };
+
     audio.onplay = () => {
+      console.log(`[TTS] Speech START (Gemini Native Audio): "${cleanText.substring(0, 60)}..." [lang=${exactLocale}] at ${new Date().toISOString()}`);
       const audioPlaybackStarted = Date.now();
       const timeToFirstAudioMs = audioPlaybackStarted - startTs;
       const updated: VoiceLatencyMetrics = {
@@ -596,30 +752,42 @@ export function speakText(
         timeToFirstAudioMs,
       };
       logMetrics(updated);
+
+      // Long safety fallback only in case audio element hangs indefinitely
+      const safetySec = audio.duration && !isNaN(audio.duration) && audio.duration > 0
+        ? audio.duration + 10
+        : Math.max(30, cleanText.length * 0.4);
+      fallbackTimer = setTimeout(() => {
+        console.warn("[TTS] Long safety timeout reached for audio playback");
+        notifyPlaybackFinished();
+      }, safetySec * 1000);
     };
 
     audio.onended = () => {
-      if (currentPlayingAudio === audio) {
-        currentPlayingAudio = null;
-      }
-      onEnd?.();
+      notifyPlaybackFinished();
     };
+
+    audio.addEventListener("ended", () => {
+      notifyPlaybackFinished();
+    });
 
     audio.onerror = (e) => {
       console.warn("[Sahayak Audio Playback Error]:", e);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       if (currentPlayingAudio === audio) {
         currentPlayingAudio = null;
       }
       // Fall back to browser speech synthesis
-      speakWithBrowserSynthesis(cleanText, lang, startTs, onEnd, latencyMetrics, onLatencyUpdate);
+      speakWithBrowserSynthesis(cleanText, exactLocale, startTs, onEnd, latencyMetrics, onLatencyUpdate);
     };
 
     audio.play().catch((playErr) => {
       console.warn("[Sahayak Audio Autoplay prevented/error, falling back]:", playErr);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       if (currentPlayingAudio === audio) {
         currentPlayingAudio = null;
       }
-      speakWithBrowserSynthesis(cleanText, lang, startTs, onEnd, latencyMetrics, onLatencyUpdate);
+      speakWithBrowserSynthesis(cleanText, exactLocale, startTs, onEnd, latencyMetrics, onLatencyUpdate);
     });
   };
 
@@ -633,19 +801,19 @@ export function speakText(
     };
   }
 
-  // Request Gemini High-Fidelity Neural TTS with a 2.5 second timeout
+  // Request High-Fidelity Neural TTS with an 8 second timeout
   const abortController = typeof AbortController !== "undefined" ? new AbortController() : null;
   const abortTimeout = setTimeout(() => {
     if (abortController) abortController.abort();
-  }, 2500);
+  }, 8000);
 
   fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       text: cleanText,
-      language: lang,
-      voice: "Kore", // Natural warm voice
+      language: exactLocale,
+      voice: "Kore", // Natural warm female voice
     }),
     signal: abortController?.signal,
   })
@@ -662,13 +830,13 @@ export function speakText(
         playBase64Audio(data.audioBase64);
       } else {
         // Fall back to browser speech synthesis immediately
-        speakWithBrowserSynthesis(cleanText, lang, startTs, onEnd, latencyMetrics, onLatencyUpdate);
+        speakWithBrowserSynthesis(cleanText, exactLocale, startTs, onEnd, latencyMetrics, onLatencyUpdate);
       }
     })
     .catch(() => {
       clearTimeout(abortTimeout);
       if (isCancelled) return;
-      speakWithBrowserSynthesis(cleanText, lang, startTs, onEnd, latencyMetrics, onLatencyUpdate);
+      speakWithBrowserSynthesis(cleanText, exactLocale, startTs, onEnd, latencyMetrics, onLatencyUpdate);
     });
 
   return () => {
@@ -685,46 +853,92 @@ export function playDirectBase64Audio(
 ): () => void {
   stopSpeaking();
   let isCancelled = false;
+  let hasEnded = false;
+  let fallbackTimer: any = null;
 
-  const audio = new Audio(`data:audio/mp3;base64,${base64Audio}`);
+  console.log("[AUDIO OUTPUT PIPELINE] Gemini Native Audio");
+  console.log("[TTS DEBUG]\npipeline = Gemini Native Audio");
+  console.log("[VOICE]\nGEMINI AUDIO RESPONSE STARTED");
+  console.log("[VOICE]\nassistantAudioStarted = true");
+  console.log("[VOICE DEBUG]\nAUDIO START\nassistantSpeaking = true");
+  console.log("[VOICE DEBUG]\nBUFFER START\npendingBuffers = 1");
+  console.log("[VOICE DEBUG]\nGEMINI TURN COMPLETE");
+
+  const audioSrc = base64Audio.startsWith("data:")
+    ? base64Audio
+    : `data:audio/wav;base64,${base64Audio}`;
+  const audio = new Audio(audioSrc);
   currentPlayingAudio = audio;
 
-  audio.onended = () => {
+  const notifyDirectPlaybackFinished = () => {
+    if (hasEnded) return;
+    hasEnded = true;
+    if (fallbackTimer) clearTimeout(fallbackTimer);
+
+    console.log(`[TTS] Speech END (Direct audio ended event fired) at ${new Date().toISOString()}`);
+    console.log("[VOICE DEBUG]\nBUFFER END\npendingBuffers = 0");
+    console.log("[VOICE DEBUG]\nALL ASSISTANT AUDIO FINISHED");
+    console.log("[VOICE]\nassistantAudioEnded = true");
+    console.log("[VOICE]\nGEMINI AUDIO RESPONSE ENDED");
+
     if (currentPlayingAudio === audio) {
       currentPlayingAudio = null;
     }
-    if (!isCancelled) {
-      onEnd?.();
-    }
+
+    // Strict Buffer: Wait 400ms after speech ends before activating downstream listener/mic
+    console.log(`[TTS] Applying 400ms buffer delay after direct audio before signaling completion...`);
+    if (activeTrailingBufferTimer) clearTimeout(activeTrailingBufferTimer);
+    activeTrailingBufferTimer = setTimeout(() => {
+      activeTrailingBufferTimer = null;
+      if (!isCancelled) {
+        console.log(`[TTS] Direct audio buffer delay completed at ${new Date().toISOString()} -> invoking onEnd callback`);
+        onEnd?.();
+      }
+    }, 400);
   };
+
+  audio.onplay = () => {
+    console.log(`[TTS] Speech START (Direct Base64 Audio) at ${new Date().toISOString()}`);
+    const safetySec = audio.duration && !isNaN(audio.duration) && audio.duration > 0
+      ? audio.duration + 10
+      : 30;
+    fallbackTimer = setTimeout(() => {
+      console.warn("[TTS] Long safety timeout reached for direct audio playback");
+      notifyDirectPlaybackFinished();
+    }, safetySec * 1000);
+  };
+
+  audio.onended = () => {
+    notifyDirectPlaybackFinished();
+  };
+
+  audio.addEventListener("ended", () => {
+    notifyDirectPlaybackFinished();
+  });
 
   audio.onerror = (e) => {
     console.warn("[Sahayak Direct Audio Playback Error]:", e);
-    if (currentPlayingAudio === audio) {
-      currentPlayingAudio = null;
-    }
-    if (!isCancelled) {
-      onEnd?.();
-    }
+    notifyDirectPlaybackFinished();
   };
 
   audio.play().catch((playErr) => {
     console.warn("[Sahayak Audio play failed]:", playErr);
-    if (currentPlayingAudio === audio) {
-      currentPlayingAudio = null;
-    }
-    if (!isCancelled) {
-      onEnd?.();
-    }
+    notifyDirectPlaybackFinished();
   });
 
   return () => {
     isCancelled = true;
+    if (fallbackTimer) clearTimeout(fallbackTimer);
     stopSpeaking();
   };
 }
 
 export function stopSpeaking() {
+  if (activeTrailingBufferTimer) {
+    clearTimeout(activeTrailingBufferTimer);
+    activeTrailingBufferTimer = null;
+  }
+
   if (activeUtteranceSafetyTimer) {
     clearTimeout(activeUtteranceSafetyTimer);
     activeUtteranceSafetyTimer = null;
@@ -773,15 +987,22 @@ export function createSpeechRecognizer(
     (window as any).webkitSpeechRecognition;
 
   if (!SpeechRecognition) {
+    console.warn("[VOICE INPUT] SpeechRecognition API not supported in this browser.");
     return null;
   }
 
   try {
     const recognition = new SpeechRecognition();
-    recognition.continuous = true;
+    recognition.continuous = false; // set false for crisp, instant turn-taking
     recognition.interimResults = true;
     recognition.lang = lang;
     recognition.maxAlternatives = 1;
+
+    let lastKnownTranscript = "";
+
+    recognition.onstart = () => {
+      console.log(`[VOICE INPUT] Speech recognition session started successfully (lang: "${lang}")`);
+    };
 
     recognition.onresult = (event: any) => {
       let finalTranscript = "";
@@ -789,25 +1010,42 @@ export function createSpeechRecognizer(
 
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         const item = event.results[i];
+        const text = item[0]?.transcript || "";
         if (item.isFinal) {
-          finalTranscript += item[0]?.transcript || "";
+          finalTranscript += text;
         } else {
-          interimTranscript += item[0]?.transcript || "";
+          interimTranscript += text;
         }
       }
 
-      if (interimTranscript && onInterim) {
-        onInterim(interimTranscript);
+      if (interimTranscript) {
+        lastKnownTranscript = interimTranscript.trim();
+        console.log(`[VOICE INPUT] Interim transcript: "${interimTranscript}"`);
+        if (onInterim) onInterim(interimTranscript);
       }
 
-      const trimmed = finalTranscript.trim();
-      if (trimmed.length > 0) {
-        onResult(trimmed);
+      const trimmedFinal = finalTranscript.trim();
+      if (trimmedFinal.length > 0) {
+        lastKnownTranscript = trimmedFinal;
+        console.log(`[VOICE INPUT] Raw final transcript received: "${trimmedFinal}"`);
+        console.log(`[VOICE INPUT] Passing transcript to app state: "${trimmedFinal}"`);
+        onResult(trimmedFinal);
       }
     };
 
     recognition.onerror = (event: any) => {
+      console.warn("[VOICE INPUT] Recognition error event:", event.error);
       onError?.(event.error);
+    };
+
+    recognition.onend = () => {
+      console.log("[VOICE INPUT] Speech recognition session ended.");
+      // If recognition ended with an interim transcript that was never marked final, flush it
+      if (lastKnownTranscript && lastKnownTranscript.length > 0) {
+        console.log(`[VOICE INPUT] Flushing final recognized speech on end: "${lastKnownTranscript}"`);
+        onResult(lastKnownTranscript);
+        lastKnownTranscript = "";
+      }
     };
 
     return recognition;

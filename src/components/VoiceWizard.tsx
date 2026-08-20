@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Mic, RotateCcw, Check, Sparkles } from "lucide-react";
+import { Mic, RotateCcw, Check, Volume2 } from "lucide-react";
 import { CitizenProfile, LanguageCode, NavTab } from "../types";
 import { VOICE_STEPS } from "../data/mockData";
 import { speakText, stopSpeaking, toBengaliNumerals, createSpeechRecognizer } from "../utils/speech";
@@ -48,13 +48,24 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
     return `(${step.questionEn})`;
   };
 
-  // Speak question
+  // Speak question aloud - Mic is strictly NOT started until speech + buffer completes
   const askQuestionAloud = () => {
     setIsSpeaking(true);
+    // If mic was listening, stop it while AI speaks
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+    setIsListening(false);
+
     const textToSpeak = getQuestion();
     const langCode = currentLanguage === "hi" ? "hi" : currentLanguage === "bn" ? "bn" : "en";
+    
+    console.log(`[TTS] VoiceWizard speaking: "${textToSpeak}" (lang: ${langCode})`);
     speakText(textToSpeak, langCode, () => {
       setIsSpeaking(false);
+      console.log(`[TTS] VoiceWizard speech finished + buffer complete`);
     });
   };
 
@@ -68,18 +79,30 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
 
   // Handle voice mic recognition
   const handleToggleListening = () => {
+    // If AI is currently speaking, stop AI speech first
+    if (isSpeaking) {
+      stopSpeaking();
+      setIsSpeaking(false);
+    }
+
     if (isListening) {
-      recognitionRef.current?.stop();
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
       setIsListening(false);
       return;
     }
 
+    console.log(`[MIC] VoiceWizard mic listening START at ${new Date().toISOString()}`);
     setIsListening(true);
     const langTag = currentLanguage === "hi" ? "hi-IN" : currentLanguage === "bn" ? "bn-IN" : "en-IN";
     
     const recognizer = createSpeechRecognizer(
       langTag,
       (transcript) => {
+        console.log(`[MIC] VoiceWizard transcript: "${transcript}"`);
         // Parse numbers if step is number
         if (step.type === "number") {
           const matchedNum = transcript.match(/\d+/);
@@ -117,6 +140,7 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
   };
 
   const handleNext = () => {
+    stopSpeaking();
     if (currentStepIndex < VOICE_STEPS.length - 1) {
       setCurrentStepIndex((prev) => prev + 1);
     } else {
@@ -125,6 +149,7 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
   };
 
   const handleRepeat = () => {
+    stopSpeaking();
     askQuestionAloud();
   };
 
@@ -203,12 +228,20 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
             <button
               id="voice-wizard-mic-button"
               onClick={handleToggleListening}
-              className={`w-20 h-20 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-md transition-all active:scale-95 cursor-pointer relative ${
-                isListening ? "ring-4 ring-indigo-200 animate-pulse scale-105" : ""
+              className={`w-20 h-20 rounded-2xl flex items-center justify-center shadow-md transition-all active:scale-95 cursor-pointer relative ${
+                isSpeaking
+                  ? "bg-indigo-700 text-white animate-pulse ring-4 ring-indigo-300"
+                  : isListening
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white ring-4 ring-emerald-200 animate-pulse scale-105"
+                  : "bg-indigo-600 hover:bg-indigo-700 text-white"
               }`}
-              title="Tap to speak"
+              title={isSpeaking ? "AI is speaking..." : isListening ? "Listening..." : "Tap to speak"}
             >
-              <Mic className="w-8 h-8 stroke-[2.2]" />
+              {isSpeaking ? (
+                <Volume2 className="w-8 h-8 stroke-[2.2] animate-bounce" />
+              ) : (
+                <Mic className="w-8 h-8 stroke-[2.2]" />
+              )}
               {isListening && (
                 <span className="absolute -top-1 -right-1 flex h-4 w-4">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
@@ -217,7 +250,23 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
               )}
             </button>
             <span className="text-xs font-semibold text-slate-700">
-              {isListening ? "Listening..." : "Tap to speak"}
+              {isSpeaking
+                ? currentLanguage === "bn"
+                  ? "সহায়ক কথা বলছে..."
+                  : currentLanguage === "hi"
+                  ? "सहायक बोल रही है..."
+                  : "AI is speaking..."
+                : isListening
+                ? currentLanguage === "bn"
+                  ? "শুনছি... (Listening)"
+                  : currentLanguage === "hi"
+                  ? "सुन रहे हैं... (Listening)"
+                  : "Listening..."
+                : currentLanguage === "bn"
+                ? "বলতে ট্যাপ করুন (Tap to speak)"
+                : currentLanguage === "hi"
+                ? "बोलने के लिए टैप करें (Tap to speak)"
+                : "Tap to speak"}
             </span>
           </div>
 
@@ -230,7 +279,13 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
               className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-xs cursor-pointer transition-all"
             >
               <Check className="w-4 h-4 stroke-[2.5]" />
-              <span>✓ ঠিক আছে (Correct)</span>
+              <span>
+                {currentLanguage === "bn"
+                  ? "✓ ঠিক আছে (Correct)"
+                  : currentLanguage === "hi"
+                  ? "✓ ठीक है (Correct)"
+                  : "✓ Correct / Next"}
+              </span>
             </button>
 
             {/* Say Again Button */}
@@ -240,7 +295,13 @@ export const VoiceWizard: React.FC<VoiceWizardProps> = ({
               className="w-full py-3 px-4 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 active:scale-[0.99] text-slate-700 font-semibold text-sm flex items-center justify-center gap-2 shadow-2xs cursor-pointer transition-all"
             >
               <RotateCcw className="w-4 h-4 text-slate-500 stroke-[2]" />
-              <span>🔁 আবার বলুন (Say again)</span>
+              <span>
+                {currentLanguage === "bn"
+                  ? "🔁 আবার বলুন (Say again)"
+                  : currentLanguage === "hi"
+                  ? "🔁 दोबारा सुनें (Say again)"
+                  : "🔁 Say again"}
+              </span>
             </button>
           </div>
         </div>

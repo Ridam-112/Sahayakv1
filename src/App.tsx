@@ -6,6 +6,7 @@ import {
   CitizenProfile,
   Scheme,
   ActiveVaultApplication,
+  VaultDocument,
   CitizenDevelopmentRequest,
 } from "./types";
 import {
@@ -16,6 +17,22 @@ import {
 import {
   INITIAL_CITIZEN_REQUESTS,
 } from "./data/developmentData";
+import {
+  loadStoredProfile,
+  saveStoredProfile,
+  loadStoredWishlist,
+  saveStoredWishlist,
+  loadStoredApplications,
+  saveStoredApplications,
+  loadStoredDocuments,
+  saveStoredDocuments,
+  loadStoredRequests,
+  saveStoredRequests,
+  loadStoredLanguage,
+  saveStoredLanguage,
+  clearAllStoredData,
+  STORAGE_KEYS,
+} from "./utils/storage";
 import { LanguageSelect } from "./components/LanguageSelect";
 import { StateSelect } from "./components/StateSelect";
 import { HomeScreen } from "./components/HomeScreen";
@@ -35,20 +52,52 @@ import { HelpGrievance } from "./components/HelpGrievance";
 import { MyVault } from "./components/MyVault";
 import { ApplicationSummaryModal } from "./components/ApplicationSummaryModal";
 import { AssistantChatModal } from "./components/AssistantChatModal";
+import { TtsDebugIndicator } from "./components/TtsDebugIndicator";
 
 export default function App() {
-  // Screen and navigation state
-  const [currentScreen, setCurrentScreen] = useState<ScreenState>("language_select");
+  // Initialize persistent profile directly from localStorage
+  const [citizenProfile, setCitizenProfile] = useState<CitizenProfile>(() => {
+    return loadStoredProfile();
+  });
+
+  // Screen and navigation state (restore home if language or profile already set)
+  const [currentScreen, setCurrentScreen] = useState<ScreenState>(() => {
+    try {
+      const storedScreen = localStorage.getItem(STORAGE_KEYS.SCREEN);
+      if (
+        storedScreen &&
+        storedScreen !== "language_select" &&
+        storedScreen !== "state_select"
+      ) {
+        return storedScreen as ScreenState;
+      }
+      const storedProfile = localStorage.getItem(STORAGE_KEYS.PROFILE);
+      const storedLang = localStorage.getItem(STORAGE_KEYS.LANGUAGE);
+      if (storedProfile || storedLang) {
+        return "home";
+      }
+    } catch (e) {
+      console.warn("[STORAGE] Failed to determine initial screen:", e);
+    }
+    return "language_select";
+  });
+
   const [screenHistory, setScreenHistory] = useState<ScreenState[]>([]);
-  const [currentLanguage, setCurrentLanguage] = useState<LanguageCode>("bn"); // Default to Bengali as requested
-  const [citizenProfile, setCitizenProfile] = useState<CitizenProfile>(INITIAL_CITIZEN_PROFILE);
-  const [schemes, setSchemes] = useState<Scheme[]>(INITIAL_SCHEMES);
+  const [currentLanguage, setCurrentLanguage] = useState<LanguageCode>(() => {
+    return loadStoredLanguage();
+  });
+
+  // Schemes evaluated against loaded profile
+  const [schemes, setSchemes] = useState<Scheme[]>(() => {
+    return evaluateSchemesForProfile(loadStoredProfile(), INITIAL_SCHEMES);
+  });
+
   const [selectedScheme, setSelectedScheme] = useState<Scheme>(INITIAL_SCHEMES[0]);
 
   // Track 1 Citizen Requests State
-  const [citizenRequests, setCitizenRequests] = useState<CitizenDevelopmentRequest[]>(
-    INITIAL_CITIZEN_REQUESTS
-  );
+  const [citizenRequests, setCitizenRequests] = useState<CitizenDevelopmentRequest[]>(() => {
+    return loadStoredRequests();
+  });
 
   // Modals state
   const [showWriteModal, setShowWriteModal] = useState(false);
@@ -56,89 +105,59 @@ export default function App() {
   const [showAssistantModal, setShowAssistantModal] = useState(false);
 
   // Wishlist and Active Applications in Vault
-  const [wishlistIds, setWishlistIds] = useState<string[]>(["pm-kisan"]);
-  const [activeApplications, setActiveApplications] = useState<ActiveVaultApplication[]>([
-    {
-      schemeId: "pm-kisan",
-      schemeName: "Pradhan Mantri Kisan Samman Nidhi (PM-KISAN)",
-      schemeCode: "PM-KISAN",
-      status: "in_progress",
-      progressPercentage: 60,
-      nextStep: "Submit Land Record / Patta for 17th Installment",
-      startedAt: "Yesterday",
-      deadline: "July 31, 2026",
-    },
-  ]);
+  const [wishlistIds, setWishlistIds] = useState<string[]>(() => {
+    return loadStoredWishlist();
+  });
 
-  // Load saved state if available
-  useEffect(() => {
-    try {
-      const savedProfile = localStorage.getItem("sahayak_citizen_profile");
-      if (savedProfile) {
-        const parsed = JSON.parse(savedProfile);
-        // Sanitize any corrupted legacy test data
-        if (parsed.income === "Bikash Mondal" || (parsed.name === "rhythm" && parsed.age === "85")) {
-          localStorage.removeItem("sahayak_citizen_profile");
-          setCitizenProfile(INITIAL_CITIZEN_PROFILE);
-          setSchemes(evaluateSchemesForProfile(INITIAL_CITIZEN_PROFILE, INITIAL_SCHEMES));
-        } else {
-          setCitizenProfile(parsed);
-          setSchemes(evaluateSchemesForProfile(parsed, INITIAL_SCHEMES));
-        }
-      }
-      const savedLang = localStorage.getItem("sahayak_lang");
-      if (savedLang) {
-        setCurrentLanguage(savedLang as LanguageCode);
-      }
-      const savedWishlist = localStorage.getItem("sahayak_wishlist");
-      if (savedWishlist) {
-        setWishlistIds(JSON.parse(savedWishlist));
-      }
-      const savedApps = localStorage.getItem("sahayak_active_apps");
-      if (savedApps) {
-        setActiveApplications(JSON.parse(savedApps));
-      }
-      const savedRequests = localStorage.getItem("sahayak_citizen_requests");
-      if (savedRequests) {
-        setCitizenRequests(JSON.parse(savedRequests));
-      }
-    } catch {}
-  }, []);
+  const [activeApplications, setActiveApplications] = useState<ActiveVaultApplication[]>(() => {
+    return loadStoredApplications();
+  });
+
+  const [vaultDocuments, setVaultDocuments] = useState<VaultDocument[]>(() => {
+    return loadStoredDocuments();
+  });
 
   // Save new citizen development request
   const handleSaveDevelopmentRequest = (newReq: CitizenDevelopmentRequest) => {
     setCitizenRequests((prev) => {
       const next = [newReq, ...prev];
-      try {
-        localStorage.setItem("sahayak_citizen_requests", JSON.stringify(next));
-      } catch {}
+      saveStoredRequests(next);
       return next;
     });
   };
 
-  // Save profile changes & re-evaluate schemes
+  // Save profile changes & re-evaluate schemes with persistence
   const handleUpdateProfile = (updated: Partial<CitizenProfile>) => {
     setCitizenProfile((prev) => {
       const next = { ...prev, ...updated };
-      try {
-        localStorage.setItem("sahayak_citizen_profile", JSON.stringify(next));
-      } catch {}
+      saveStoredProfile(next);
       setSchemes(evaluateSchemesForProfile(next, INITIAL_SCHEMES));
       return next;
     });
   };
 
-  // Reset profile to clean state for a new interview
+  // Reset profile / start fresh
   const handleResetProfile = () => {
     const cleanProfile: CitizenProfile = {
       ...INITIAL_CITIZEN_PROFILE,
       state: citizenProfile.state || "West Bengal",
     };
     setCitizenProfile(cleanProfile);
-    try {
-      localStorage.setItem("sahayak_citizen_profile", JSON.stringify(cleanProfile));
-    } catch {}
+    saveStoredProfile(cleanProfile);
     setSchemes(evaluateSchemesForProfile(cleanProfile, INITIAL_SCHEMES));
+  };
+
+  // Full reset of all user data in localStorage
+  const handleResetAllData = () => {
+    clearAllStoredData();
+    const cleanProfile = { ...INITIAL_CITIZEN_PROFILE };
+    setCitizenProfile(cleanProfile);
+    setSchemes(evaluateSchemesForProfile(cleanProfile, INITIAL_SCHEMES));
+    setWishlistIds(["pm-kisan"]);
+    setActiveApplications(loadStoredApplications());
+    setVaultDocuments(loadStoredDocuments());
+    setCitizenRequests(INITIAL_CITIZEN_REQUESTS);
+    navigateTo("home");
   };
 
   // Toggle wishlist
@@ -146,9 +165,7 @@ export default function App() {
     setWishlistIds((prev) => {
       const exists = prev.includes(schemeId);
       const next = exists ? prev.filter((id) => id !== schemeId) : [...prev, schemeId];
-      try {
-        localStorage.setItem("sahayak_wishlist", JSON.stringify(next));
-      } catch {}
+      saveStoredWishlist(next);
       return next;
     });
   };
@@ -173,9 +190,7 @@ export default function App() {
       };
 
       const nextList = [newApp, ...prev];
-      try {
-        localStorage.setItem("sahayak_active_apps", JSON.stringify(nextList));
-      } catch {}
+      saveStoredApplications(nextList);
       return nextList;
     });
 
@@ -184,14 +199,15 @@ export default function App() {
 
   const handleSelectLanguage = (lang: LanguageCode) => {
     setCurrentLanguage(lang);
-    try {
-      localStorage.setItem("sahayak_lang", lang);
-    } catch {}
+    saveStoredLanguage(lang);
   };
 
   const navigateTo = (nextScreen: ScreenState) => {
     setScreenHistory((prev) => [...prev, currentScreen]);
     setCurrentScreen(nextScreen);
+    try {
+      localStorage.setItem(STORAGE_KEYS.SCREEN, nextScreen);
+    } catch {}
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -200,9 +216,29 @@ export default function App() {
       const prev = screenHistory[screenHistory.length - 1];
       setScreenHistory((prevHist) => prevHist.slice(0, -1));
       setCurrentScreen(prev);
+      try {
+        localStorage.setItem(STORAGE_KEYS.SCREEN, prev);
+      } catch {}
       window.scrollTo({ top: 0, behavior: "smooth" });
     } else {
       setCurrentScreen("home");
+      try {
+        localStorage.setItem(STORAGE_KEYS.SCREEN, "home");
+      } catch {}
+    }
+  };
+
+  const handleOpenSchemes = () => {
+    const isFilled = Boolean(
+      citizenProfile.name ||
+      citizenProfile.age ||
+      citizenProfile.income ||
+      (citizenProfile.occupation && citizenProfile.occupation.trim().length > 0)
+    );
+    if (isFilled) {
+      navigateTo("schemes_list");
+    } else {
+      navigateTo("find_schemes_voice");
     }
   };
 
@@ -218,7 +254,7 @@ export default function App() {
         navigateTo("policymaker_dashboard");
         break;
       case "schemes":
-        navigateTo("find_schemes_voice");
+        handleOpenSchemes();
         break;
       case "civic_feed":
         navigateTo("civic_feed");
@@ -263,7 +299,7 @@ export default function App() {
             onStartVoiceReport={() => navigateTo("development_voice")}
             onStartTextReport={() => setShowWriteModal(true)}
             onOpenDashboard={() => navigateTo("policymaker_dashboard")}
-            onOpenSchemes={() => navigateTo("find_schemes_voice")}
+            onOpenSchemes={handleOpenSchemes}
             onOpenFeed={() => navigateTo("civic_feed")}
             onOpenHelp={() => navigateTo("help_grievance")}
             onSelectNavTab={handleNavTabSelect}
@@ -335,6 +371,7 @@ export default function App() {
             onChangeProfile={handleUpdateProfile}
             onSubmit={() => navigateTo("schemes_list")}
             onSwitchToVoice={() => navigateTo("find_schemes_voice")}
+            onResetProfile={handleResetAllData}
             currentLanguage={currentLanguage}
             onSelectLanguage={handleSelectLanguage}
             onBack={handleBack}
@@ -371,6 +408,7 @@ export default function App() {
               handleResetProfile();
               navigateTo("find_schemes_voice");
             }}
+            onResetData={handleResetAllData}
             currentLanguage={currentLanguage}
             onSelectLanguage={handleSelectLanguage}
             onSelectNavTab={handleNavTabSelect}
@@ -427,7 +465,7 @@ export default function App() {
                 navigateTo("scheme_apply");
               }
             }}
-            onExploreSchemes={() => navigateTo("find_schemes_voice")}
+            onExploreSchemes={handleOpenSchemes}
             currentLanguage={currentLanguage}
             onSelectLanguage={handleSelectLanguage}
             onSelectNavTab={handleNavTabSelect}
@@ -448,23 +486,29 @@ export default function App() {
         />
       )}
 
-      {/* Application Summary Modal */}
+      {/* Application Summary Export / Share Modal */}
       {showSummaryModal && (
         <ApplicationSummaryModal
+          isOpen={showSummaryModal}
+          onClose={() => setShowSummaryModal(false)}
           scheme={selectedScheme}
           profile={citizenProfile}
-          onClose={() => setShowSummaryModal(false)}
+          currentLanguage={currentLanguage}
         />
       )}
 
-      {/* Assistant Chat Modal */}
+      {/* AI Assistant Chat Modal */}
       {showAssistantModal && (
         <AssistantChatModal
+          isOpen={showAssistantModal}
+          onClose={() => setShowAssistantModal(false)}
           profile={citizenProfile}
           currentLanguage={currentLanguage}
-          onClose={() => setShowAssistantModal(false)}
         />
       )}
+
+      {/* Global Bottom-Right TTS Indicator */}
+      <TtsDebugIndicator currentLanguage={currentLanguage} />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -7,10 +7,15 @@ import {
   Edit2,
   MessageSquare,
   Info,
+  Mic,
+  Search,
+  X,
+  AlertCircle,
 } from "lucide-react";
 import { Scheme, LanguageCode, NavTab } from "../types";
 import { Header } from "./Header";
 import { BottomNav } from "./BottomNav";
+import { createSpeechRecognizer } from "../utils/speech";
 
 interface SchemesListProps {
   schemes: Scheme[];
@@ -34,6 +39,106 @@ export const SchemesList: React.FC<SchemesListProps> = ({
   onBack,
 }) => {
   const [activeReasonModal, setActiveReasonModal] = useState<Scheme | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
+
+  const handleToggleVoiceSearch = () => {
+    console.log("[VOICE INPUT] Mic tap detected in SchemesList search bar.");
+    setMicError(null);
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      setIsListening(false);
+      return;
+    }
+
+    const langTag = currentLanguage === "hi" ? "hi-IN" : currentLanguage === "bn" ? "bn-IN" : "en-IN";
+    console.log(`[VOICE INPUT] Starting speech recognition in SchemesList (lang: ${langTag})`);
+
+    const recognizer = createSpeechRecognizer(
+      langTag,
+      (transcript) => {
+        console.log(`[VOICE INPUT] Raw transcript received: "${transcript}"`);
+        console.log(`[VOICE INPUT] Transcript passed to app state (searchQuery): "${transcript}"`);
+        setSearchQuery(transcript);
+        setIsListening(false);
+      },
+      (err) => {
+        console.warn("[VOICE INPUT] Speech recognition error:", err);
+        setIsListening(false);
+        if (err === "not-allowed" || err === "service-not-allowed") {
+          setMicError(
+            currentLanguage === "bn"
+              ? "মাইক্রোফোনের অনুমতি দেওয়া হয়নি। দয়া করে ব্রাউজারে অনুমতি দিন বা টাইপ করুন।"
+              : currentLanguage === "hi"
+              ? "माइक्रोफ़ोन की अनुमति नहीं है। कृपया अनुमति दें या टाइप करें।"
+              : "Microphone access denied. Please allow microphone access or type."
+          );
+        } else {
+          setMicError(
+            currentLanguage === "bn"
+              ? "কথা বোঝা যায়নি। আবার বলুন বা টাইপ করুন।"
+              : currentLanguage === "hi"
+              ? "आवाज़ नहीं पहचानी गई। कृपया पुनः बोलें या लिखें।"
+              : "Could not recognize voice. Please try again or type."
+          );
+        }
+      },
+      (interim) => {
+        console.log(`[VOICE INPUT] Interim search transcript: "${interim}"`);
+        setSearchQuery(interim);
+      }
+    );
+
+    if (!recognizer) {
+      setMicError(
+        currentLanguage === "bn"
+          ? "আপনার ব্রাউজারে ভয়েস সার্চ সমর্থিত নয়।"
+          : currentLanguage === "hi"
+          ? "आपके ब्राउज़र में वॉयस सर्च समर्थित नहीं है।"
+          : "Voice search is not supported in this browser."
+      );
+      return;
+    }
+
+    recognitionRef.current = recognizer;
+    try {
+      recognizer.start();
+      setIsListening(true);
+      console.log("[VOICE INPUT] recognition.start() called in SchemesList.");
+    } catch (e) {
+      console.warn("[VOICE INPUT] Failed to start recognition:", e);
+      setIsListening(false);
+    }
+  };
+
+  const filteredSchemes = schemes.filter((s) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    return (
+      s.name.toLowerCase().includes(q) ||
+      (s.fullName || "").toLowerCase().includes(q) ||
+      s.description.toLowerCase().includes(q) ||
+      (s.benefitShort || "").toLowerCase().includes(q) ||
+      (s.tags || []).some((t) => t.toLowerCase().includes(q))
+    );
+  });
 
   return (
     <div className="flex flex-col min-h-screen justify-between bg-slate-50">
@@ -55,9 +160,92 @@ export const SchemesList: React.FC<SchemesListProps> = ({
           </p>
         </div>
 
+        {/* Search & Voice Filter */}
+        <div className="space-y-2">
+          <div className="relative flex items-center">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
+            <input
+              type="text"
+              id="input-schemes-list-search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={
+                currentLanguage === "bn"
+                  ? "প্রকল্প খুঁজুন বা মাইক চেপে বলুন..."
+                  : currentLanguage === "hi"
+                  ? "योजना खोजें या माइक दबाकर बोलें..."
+                  : "Search schemes or speak..."
+              }
+              className="w-full pl-9 pr-20 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 shadow-2xs transition-all"
+            />
+            <div className="absolute right-1.5 flex items-center gap-1">
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                id="btn-schemes-list-voice"
+                onClick={handleToggleVoiceSearch}
+                className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+                  isListening
+                    ? "bg-rose-500 text-white animate-pulse shadow-xs"
+                    : "bg-indigo-50 hover:bg-indigo-100 text-indigo-700"
+                }`}
+                title={isListening ? "Listening... tap to stop" : "Speak to search"}
+              >
+                <Mic className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Listening State */}
+          {isListening && (
+            <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-semibold animate-pulse">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-indigo-600 animate-ping" />
+                <span>
+                  {currentLanguage === "bn"
+                    ? "🎙️ শুনছি... বলুন"
+                    : currentLanguage === "hi"
+                    ? "🎙️ सुन रहा हूँ... बोलिए"
+                    : "🎙️ Listening... Speak query"}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={handleToggleVoiceSearch}
+                className="text-[11px] font-bold text-indigo-700 hover:underline cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          {/* Mic Error Alert */}
+          {micError && (
+            <div className="flex items-start gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1 leading-snug">{micError}</div>
+              <button
+                type="button"
+                onClick={() => setMicError(null)}
+                className="text-amber-700 hover:text-amber-900 font-bold ml-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Scheme Cards */}
         <div className="space-y-3.5 pt-1">
-          {schemes.map((scheme) => {
+          {filteredSchemes.map((scheme) => {
             const isEligible = scheme.status === "eligible";
             const isNeedsInfo = scheme.status === "needs_info";
             const isNotEligible = scheme.status === "not_eligible";

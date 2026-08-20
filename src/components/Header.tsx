@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ArrowLeft, Globe, Mic, MicOff, Shield } from "lucide-react";
+import { ArrowLeft, Globe, Mic, Shield, RotateCcw, Settings } from "lucide-react";
 import { LanguageCode } from "../types";
 import { ALL_LANGUAGES } from "../data/mockData";
 
@@ -10,6 +10,7 @@ interface HeaderProps {
   onBack?: () => void;
   isVoiceActive?: boolean;
   onToggleVoice?: () => void;
+  onResetData?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -19,8 +20,10 @@ export const Header: React.FC<HeaderProps> = ({
   onBack,
   isVoiceActive = false,
   onToggleVoice,
+  onResetData,
 }) => {
   const [showLangMenu, setShowLangMenu] = useState(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
 
   const getLanguageLabel = (code: LanguageCode) => {
     switch (code) {
@@ -65,7 +68,10 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="relative">
           <button
             id="header-language-toggle"
-            onClick={() => setShowLangMenu(!showLangMenu)}
+            onClick={() => {
+              setShowLangMenu(!showLangMenu);
+              setShowSettingsMenu(false);
+            }}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 transition-colors shadow-2xs cursor-pointer"
           >
             <Globe className="w-3.5 h-3.5 text-slate-500" />
@@ -100,20 +106,59 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
 
+        {/* Settings / Reset Data menu */}
+        {onResetData && (
+          <div className="relative">
+            <button
+              id="header-settings-toggle"
+              onClick={() => {
+                setShowSettingsMenu(!showSettingsMenu);
+                setShowLangMenu(false);
+              }}
+              className="p-2 rounded-lg border border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900 transition-all cursor-pointer"
+              title="Settings & Reset Data"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+
+            {showSettingsMenu && (
+              <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                <div className="px-2 py-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  Data Settings
+                </div>
+                <button
+                  type="button"
+                  id="btn-reset-saved-data"
+                  onClick={() => {
+                    setShowSettingsMenu(false);
+                    onResetData();
+                  }}
+                  className="w-full text-left px-2.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-lg flex items-center gap-2 transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset my data / নতুন শুরু করুন</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Voice Assistant Toggle */}
-        <button
-          id="header-voice-button"
-          onClick={onToggleVoice}
-          className={`p-2 rounded-lg border transition-all active:scale-95 cursor-pointer ${
-            isVoiceActive
-              ? "bg-indigo-600 text-white border-indigo-700 ring-2 ring-indigo-200 shadow-xs"
-              : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200 hover:text-slate-900"
-          }`}
-          title={isVoiceActive ? "Voice mode active" : "Enable voice assistant"}
-          aria-label="Toggle voice assistant"
-        >
-          <Mic className="w-4 h-4" />
-        </button>
+        {onToggleVoice && (
+          <button
+            id="header-voice-button"
+            onClick={onToggleVoice}
+            className={`p-2 rounded-lg border transition-all active:scale-95 cursor-pointer ${
+              isVoiceActive
+                ? "bg-indigo-600 text-white border-indigo-700 ring-2 ring-indigo-200 shadow-xs"
+                : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200 hover:text-slate-900"
+            }`}
+            title={isVoiceActive ? "Voice mode active" : "Enable voice assistant"}
+            aria-label="Toggle voice assistant"
+          >
+            <Mic className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </header>
   );
